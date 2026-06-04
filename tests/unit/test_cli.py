@@ -59,7 +59,8 @@ def test_compile_unknown_pipeline_exits_one(tmp_path):
     assert result.exit_code == 1
 
 
-def test_run_stub_is_not_implemented(tmp_path):
+def test_run_requires_only_flag(tmp_path):
+    # M2: `run` without --only exits 2 with a message mentioning "only".
     result = runner.invoke(app, ["run", "feature"])
-    assert result.exit_code != 0
-    assert "not implemented" in result.stdout.lower()
+    assert result.exit_code == 2
+    assert "only" in result.stdout.lower()
