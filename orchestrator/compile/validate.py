@@ -8,6 +8,8 @@ Errors block compilation; warnings do not. Three independent checks:
 
 from __future__ import annotations
 
+import re
+
 from orchestrator.config.schemas import Pipeline
 
 
@@ -73,5 +75,51 @@ def validate_dag(pipeline: Pipeline) -> list[str]:
                 f"step '{step.id}' on_reject must point to an upstream step, got "
                 f"'{step.on_reject}'"
             )
+
+    return errors
+
+
+_REF = re.compile(r"<([a-zA-Z_][\w.-]*)>")
+
+
+def validate_typed_io(pipeline: Pipeline) -> list[str]:
+    errors: list[str] = []
+    by_id = {s.id: s for s in pipeline.steps}
+    inputs = set(pipeline.inputs)
+
+    for step in pipeline.steps:
+        if not step.prompt:
+            continue
+        for token in _REF.findall(step.prompt):
+            parts = token.split(".")
+            head = parts[0]
+
+            # Bare <name> -> pipeline input.
+            if len(parts) == 1:
+                if head not in inputs:
+                    errors.append(
+                        f"step '{step.id}': reference <{token}> matches no pipeline input"
+                    )
+                continue
+
+            # <stepid.output[.field]> -> another step's output.
+            if head not in by_id:
+                errors.append(
+                    f"step '{step.id}': reference <{token}> targets unknown step '{head}'"
+                )
+                continue
+            if len(parts) >= 2 and parts[1] != "output":
+                errors.append(
+                    f"step '{step.id}': reference <{token}> must use '.output' "
+                    f"(got '.{parts[1]}')"
+                )
+                continue
+            if len(parts) == 3:
+                schema = by_id[head].output_schema or {}
+                if parts[2] not in schema:
+                    errors.append(
+                        f"step '{step.id}': reference <{token}> field '{parts[2]}' not in "
+                        f"output_schema of '{head}'"
+                    )
 
     return errors
