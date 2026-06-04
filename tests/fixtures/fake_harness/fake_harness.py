@@ -22,6 +22,11 @@ def main() -> int:
     if argv_file:
         Path(argv_file).write_text("\n".join(sys.argv[1:]))
 
+    stderr_bytes = int(os.environ.get("ORCH_FAKE_STDERR_BYTES", "0"))
+    if stderr_bytes:
+        sys.stderr.write("x" * stderr_bytes)
+        sys.stderr.flush()
+
     touch = os.environ.get("ORCH_FAKE_TOUCH")
     if touch:
         Path(touch).write_text("created by fake harness\n")
