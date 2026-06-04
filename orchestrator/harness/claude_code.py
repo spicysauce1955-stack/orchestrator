@@ -181,5 +181,17 @@ class ClaudeCodeCLIAdapter:
         self._sessions.pop(session, None)
 
     def translate(self, caps: object, *, cwd: Path | None = None) -> list[str]:
-        # Implemented in Task 10.
-        return []
+        """ResolvedCaps → Claude Code CLI flags (spec §4.1, §5)."""
+        from orchestrator.safety.capabilities import ResolvedCaps as RC
+
+        if not isinstance(caps, RC):
+            return []
+        flags: list[str] = []
+        if cwd is not None:
+            flags += ["--add-dir", str(cwd)]
+        flags += ["--permission-mode", caps.permission_mode]
+        if caps.allowed_tools:
+            flags += ["--allowedTools", ",".join(caps.allowed_tools)]
+        if caps.disallowed_tools:
+            flags += ["--disallowedTools", ",".join(caps.disallowed_tools)]
+        return flags
