@@ -1,3 +1,12 @@
 
 # Brainstorm visual-companion scratch
 .superpowers/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
