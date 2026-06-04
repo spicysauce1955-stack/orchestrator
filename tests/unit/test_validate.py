@@ -140,3 +140,46 @@ def test_reference_to_unknown_step_reported():
     )
     errors = validate_typed_io(p)
     assert any("ghost" in e for e in errors)
+
+
+from orchestrator.compile.validate import validate_file_scope
+
+
+def test_no_overlap_no_warnings():
+    p = Pipeline.model_validate(
+        {
+            "steps": [
+                {"id": "a", "role": "x", "file_scope": ["src/**"]},
+                {"id": "b", "role": "y", "needs": ["a"], "file_scope": ["tests/**"]},
+            ]
+        }
+    )
+    assert validate_file_scope(p) == []
+
+
+def test_concurrent_steps_with_identical_scope_warn():
+    # a and b are concurrent (neither depends on the other) and share a scope.
+    p = Pipeline.model_validate(
+        {
+            "steps": [
+                {"id": "root", "type": "task", "prompt": "x"},
+                {"id": "a", "role": "x", "needs": ["root"], "file_scope": ["src/**"]},
+                {"id": "b", "role": "y", "needs": ["root"], "file_scope": ["src/**"]},
+            ]
+        }
+    )
+    warnings = validate_file_scope(p)
+    assert any("a" in w and "b" in w and "src/**" in w for w in warnings)
+
+
+def test_sequential_steps_sharing_scope_do_not_warn():
+    # b depends on a, so they never run concurrently.
+    p = Pipeline.model_validate(
+        {
+            "steps": [
+                {"id": "a", "role": "x", "file_scope": ["src/**"]},
+                {"id": "b", "role": "y", "needs": ["a"], "file_scope": ["src/**"]},
+            ]
+        }
+    )
+    assert validate_file_scope(p) == []

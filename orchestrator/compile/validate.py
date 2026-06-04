@@ -123,3 +123,29 @@ def validate_typed_io(pipeline: Pipeline) -> list[str]:
                     )
 
     return errors
+
+
+def validate_file_scope(pipeline: Pipeline) -> list[str]:
+    """Warn when two steps that may run concurrently declare overlapping write scope.
+
+    Two steps are concurrent when neither is an ancestor (transitive `needs`) of the
+    other. Scope overlap (M1) = an exact glob shared between the two scope lists.
+    """
+    warnings: list[str] = []
+    deps = {s.id: list(s.needs) for s in pipeline.steps}
+    scoped = [s for s in pipeline.steps if s.file_scope]
+
+    for i, a in enumerate(scoped):
+        a_anc = _ancestors(a.id, deps)
+        for b in scoped[i + 1 :]:
+            b_anc = _ancestors(b.id, deps)
+            concurrent = a.id not in b_anc and b.id not in a_anc
+            if not concurrent:
+                continue
+            shared = sorted(set(a.file_scope) & set(b.file_scope))
+            for glob in shared:
+                warnings.append(
+                    f"steps '{a.id}' and '{b.id}' may run concurrently and both write "
+                    f"'{glob}'"
+                )
+    return warnings
