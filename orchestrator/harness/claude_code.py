@@ -14,6 +14,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orchestrator.harness.adapter import McpServer, SessionId
 from orchestrator.harness.events import (
@@ -25,6 +26,9 @@ from orchestrator.harness.events import (
     SessionStarted,
     ToolCall,
 )
+
+if TYPE_CHECKING:
+    from orchestrator.safety.capabilities import ResolvedCaps
 
 # tool_use names that mutate files → also emit a FileEdit
 _EDIT_TOOLS = {
@@ -88,7 +92,7 @@ def parse_line(obj: dict, tool_names: dict[str, str]) -> list[Event]:
 @dataclass
 class _Session:
     cwd: Path
-    caps: object  # ResolvedCaps — typed as object to avoid circular import at runtime
+    caps: ResolvedCaps
     mcp_servers: list[McpServer]
     harness_session_id: str | None = None
 
@@ -113,7 +117,7 @@ class ClaudeCodeCLIAdapter:
         self,
         *,
         cwd: Path,
-        caps: object,
+        caps: ResolvedCaps,
         mcp_servers: list[McpServer],
     ) -> SessionId:
         handle = uuid.uuid4().hex
@@ -180,12 +184,8 @@ class ClaudeCodeCLIAdapter:
     async def cancel(self, session: SessionId) -> None:
         self._sessions.pop(session, None)
 
-    def translate(self, caps: object, *, cwd: Path | None = None) -> list[str]:
+    def translate(self, caps: ResolvedCaps, *, cwd: Path | None = None) -> list[str]:
         """ResolvedCaps → Claude Code CLI flags (spec §4.1, §5)."""
-        from orchestrator.safety.capabilities import ResolvedCaps as RC
-
-        if not isinstance(caps, RC):
-            return []
         flags: list[str] = []
         if cwd is not None:
             flags += ["--add-dir", str(cwd)]
