@@ -27,11 +27,33 @@ def main() -> int:
         sys.stderr.write("x" * stderr_bytes)
         sys.stderr.flush()
 
+    # Record the prompt (arg after -p) for routing + logging.
+    prompt = ""
+    args = sys.argv[1:]
+    if "-p" in args:
+        i = args.index("-p")
+        if i + 1 < len(args):
+            prompt = args[i + 1]
+
+    calls_log = os.environ.get("ORCH_FAKE_CALLS")
+    if calls_log:
+        with open(calls_log, "a") as fh:
+            fh.write(prompt[:60] + "\n")
+
     touch = os.environ.get("ORCH_FAKE_TOUCH")
     if touch:
         Path(touch).write_text("created by fake harness\n")
 
-    script = Path(os.environ.get("ORCH_FAKE_SCRIPT", str(DEFAULT_SCRIPT)))
+    # Script selection: explicit file wins; else route within a dir by prompt keyword.
+    script_env = os.environ.get("ORCH_FAKE_SCRIPT")
+    script_dir = os.environ.get("ORCH_FAKE_SCRIPT_DIR")
+    if script_env:
+        script = Path(script_env)
+    elif script_dir:
+        name = "classify.ndjson" if "classify" in prompt.lower() else "default.ndjson"
+        script = Path(script_dir) / name
+    else:
+        script = DEFAULT_SCRIPT
     for line in script.read_text().splitlines():
         if not line.strip():
             continue

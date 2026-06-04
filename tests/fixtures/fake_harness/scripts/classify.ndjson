@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"fake-classify-1","tools":[],"cwd":"."}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Classifying."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"{\"kind\": \"feature\"}","total_cost_usd":0.001,"usage":{"input_tokens":20,"output_tokens":5},"session_id":"fake-classify-1","kind":"feature"}
