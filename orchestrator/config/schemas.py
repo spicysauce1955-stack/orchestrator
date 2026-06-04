@@ -71,3 +71,37 @@ class Access(_Strict):
     shell: ShellAccess | None = None
     git: GitAccess | None = None
     knowledge: KnowledgeAccess | None = None
+
+
+class Role(_Strict):
+    name: str = ""  # populated from filename by the loader
+    harness: Harness
+    model: str | None = None
+    permissions: PermissionProfile = PermissionProfile.edit
+    access: Access | None = None
+    skills: list[str] = Field(default_factory=list)
+    knowledge: list[str] = Field(default_factory=list)
+    mcp: list[str] = Field(default_factory=list)
+    budget: Budget = Field(default_factory=Budget)
+
+
+class Skill(_Strict):
+    name: str = ""  # populated from filename by the loader
+    instructions: str
+    tools: list[str] = Field(default_factory=list)
+    mcp: list[str] = Field(default_factory=list)
+    knowledge: list[str] = Field(default_factory=list)
+
+
+class CoreKnowledge(_Strict):
+    """knowledge/core.yaml — files always injected into a session's working dir."""
+
+    inject: list[str] = Field(default_factory=list)
+
+
+class KnowledgeSource(_Strict):
+    """Any knowledge/<name>.yaml other than core — on-demand lexical source."""
+
+    name: str = ""  # populated from filename by the loader
+    sources: list[str] = Field(default_factory=list)
+    backend: str = "lexical"
