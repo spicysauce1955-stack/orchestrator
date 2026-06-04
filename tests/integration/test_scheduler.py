@@ -17,6 +17,9 @@ EXAMPLE = "examples/feature-pipeline/.orchestrator"
 async def test_linear_pipeline_runs_end_to_end(tmp_path, monkeypatch):
     # Route classify -> classify.ndjson (JSON kind), other steps -> default.ndjson.
     monkeypatch.setenv("ORCH_FAKE_SCRIPT_DIR", str(SCRIPTS))
+    # Capture the prompt each step actually sent, to prove cross-step dataflow.
+    calls = tmp_path / "calls.log"
+    monkeypatch.setenv("ORCH_FAKE_CALLS", str(calls))
     configure_tracing(exporter=InMemorySpanExporter())
 
     repo = make_repo(tmp_path / "repo")
@@ -33,3 +36,10 @@ async def test_linear_pipeline_runs_end_to_end(tmp_path, monkeypatch):
     assert ctx.artifacts["implement"].is_error is False
     # cost rolled up across steps
     assert ctx.total_cost_usd > 0
+
+    # Explicit cross-step dataflow proof: plan's rendered prompt must contain the
+    # classify output ("Kind: feature" from {{classify.output.kind}}), not the
+    # literal template. The fake harness logs the prompt prefix of each call.
+    logged = calls.read_text()
+    assert "Kind: feature" in logged
+    assert "{{" not in logged  # no unrendered template tokens leaked to the harness
