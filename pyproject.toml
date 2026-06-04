@@ -33,3 +33,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# UP042: the (str, Enum) pattern is deliberate — it serializes cleanly to YAML
+# string values and is fully supported by Pydantic v2.
+ignore = ["UP042"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer requires Option/Argument calls in parameter defaults (not a real B008 bug).
+extend-immutable-calls = ["typer.Option", "typer.Argument"]

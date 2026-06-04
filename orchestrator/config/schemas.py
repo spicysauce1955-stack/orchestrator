@@ -123,7 +123,7 @@ class Step(_Strict):
     merge_strategy: str | None = None
 
     @model_validator(mode="after")
-    def _infer_and_check_type(self) -> "Step":
+    def _infer_and_check_type(self) -> Step:
         if self.type is None:
             if self.role is not None:
                 self.type = StepType.agent
@@ -147,7 +147,7 @@ class Pipeline(_Strict):
     steps: list[Step]
 
     @model_validator(mode="after")
-    def _unique_step_ids(self) -> "Pipeline":
+    def _unique_step_ids(self) -> Pipeline:
         seen: set[str] = set()
         for step in self.steps:
             if step.id in seen:

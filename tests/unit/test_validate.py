@@ -1,4 +1,8 @@
-from orchestrator.compile.validate import validate_dag
+from orchestrator.compile.validate import (
+    validate_dag,
+    validate_file_scope,
+    validate_typed_io,
+)
 from orchestrator.config.schemas import Pipeline
 
 
@@ -63,9 +67,6 @@ def test_on_reject_must_point_upstream():
     )
     errors = validate_dag(p)
     assert any("upstream" in e.lower() for e in errors)
-
-
-from orchestrator.compile.validate import validate_typed_io
 
 
 def test_input_reference_resolves():
@@ -140,9 +141,6 @@ def test_reference_to_unknown_step_reported():
     )
     errors = validate_typed_io(p)
     assert any("ghost" in e for e in errors)
-
-
-from orchestrator.compile.validate import validate_file_scope
 
 
 def test_no_overlap_no_warnings():

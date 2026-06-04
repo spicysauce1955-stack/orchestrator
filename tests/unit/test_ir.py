@@ -9,7 +9,12 @@ def _pipeline() -> Pipeline:
                 {"id": "classify", "type": "task", "prompt": "Classify <task>"},
                 {"id": "plan", "role": "planner", "needs": ["classify"]},
                 {"id": "implement", "role": "implementer", "needs": ["plan"], "max_retries": 2},
-                {"id": "review", "role": "reviewer", "needs": ["implement"], "on_reject": "implement"},
+                {
+                    "id": "review",
+                    "role": "reviewer",
+                    "needs": ["implement"],
+                    "on_reject": "implement",
+                },
                 {"id": "test", "role": "implementer", "needs": ["review"]},
             ]
         }
