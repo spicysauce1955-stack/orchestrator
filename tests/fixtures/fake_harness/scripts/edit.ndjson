@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"fake-edit-1","tools":["Read","Edit","Write"],"cwd":"."}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Editing now."}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e1","name":"Write","input":{"file_path":"note.txt"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"e1","content":"ok"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Edit complete","total_cost_usd":0.02,"usage":{"input_tokens":120,"output_tokens":80},"session_id":"fake-edit-1"}
