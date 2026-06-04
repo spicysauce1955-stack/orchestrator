@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TypedDict
 
 
 @dataclass
@@ -14,6 +15,7 @@ class Artifact:
     cost_usd: float
     tokens: int
     is_error: bool
+    output_data: dict | None = None
 
 
 @dataclass
@@ -26,3 +28,13 @@ class RunContext:
     def record(self, artifact: Artifact) -> None:
         self.artifacts[artifact.step_id] = artifact
         self.total_cost_usd += artifact.cost_usd
+
+
+class GraphState(TypedDict, total=False):
+    """Executable-graph state: a single shared RunContext threaded through nodes.
+
+    MVP pipelines are linear, so one mutable RunContext under one key is safe.
+    Parallel/best-of-n branches (deferred) would need per-key reducers.
+    """
+
+    ctx: RunContext
