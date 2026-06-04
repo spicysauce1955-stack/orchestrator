@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from orchestrator.config.loader import load_workspace
@@ -14,6 +15,7 @@ from orchestrator.observability.spans import (
 )
 from orchestrator.runtime.executors import run_agent_step
 from orchestrator.runtime.state import RunContext
+from orchestrator.runtime.template import TemplateError
 from tests.fixtures.repo import make_repo
 
 FAKE = Path(__file__).parent.parent / "fixtures" / "fake_harness" / "fake_harness.py"
@@ -100,7 +102,10 @@ async def test_success_criteria_retries_then_passes(tmp_path, monkeypatch):
     )
 
     assert artifact.is_error is False           # passed within retry budget
-    assert len(calls.read_text().splitlines()) == 2  # harness re-prompted once
+    # Each invocation logs prompt[:60]; count entries starting with base prompt.
+    log_lines = calls.read_text().splitlines()
+    invocations = sum(1 for ln in log_lines if ln.startswith("do the work"))
+    assert invocations == 2                     # harness re-prompted once
     assert artifact.cost_usd > 0.01             # cost summed across 2 attempts
 
 
@@ -123,3 +128,22 @@ async def test_success_criteria_fails_after_exhausting_retries(tmp_path, monkeyp
         ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter
     )
     assert artifact.is_error is True
+
+
+async def test_bad_template_ref_raises_template_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "default.ndjson"))
+
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    step = Step.model_validate({
+        "id": "impl_bad_ref",
+        "role": "implementer",
+        "prompt": "use {{nonexistent}}",
+    })
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    ctx = RunContext(run_id="tmpl", inputs={"task": "t"})
+
+    with pytest.raises(TemplateError):
+        await run_agent_step(
+            ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter
+        )

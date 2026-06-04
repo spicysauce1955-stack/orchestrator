@@ -132,7 +132,6 @@ async def run_agent_step(
     role = workspace.roles[step.role]
     caps = resolve_capabilities(role, workspace)
     branch = f"orch/{ctx.run_id}/{step.id}"
-    worktree = create_worktree(Path(repo), branch=branch)
 
     tracer = get_tracer()
     total_cost = 0.0
@@ -140,6 +139,7 @@ async def run_agent_step(
     output = ""
     is_error = False
 
+    worktree = create_worktree(Path(repo), branch=branch)
     try:
         with tracer.start_as_current_span(SPAN_STEP) as step_span:
             step_span.set_attribute("step.id", step.id)
@@ -147,9 +147,9 @@ async def run_agent_step(
             step_span.set_attribute("step.harness", role.harness.value)
 
             base_prompt = _render_prompt(step, step.role, ctx)
-            feedback = ""
+            feedback: str | None = None
             for attempt in range(step.max_retries + 1):
-                if not feedback:
+                if feedback is None:
                     prompt = base_prompt
                 else:
                     prompt = (
