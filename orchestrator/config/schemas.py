@@ -105,3 +105,63 @@ class KnowledgeSource(_Strict):
     name: str = ""  # populated from filename by the loader
     sources: list[str] = Field(default_factory=list)
     backend: str = "lexical"
+
+
+class Step(_Strict):
+    id: str
+    type: StepType | None = None  # inferred from `role` when omitted
+    role: str | None = None
+    prompt: str | None = None
+    output_schema: dict | None = None
+    needs: list[str] = Field(default_factory=list)
+    file_scope: list[str] = Field(default_factory=list)
+    isolation: Isolation | None = None
+    success_criteria: str | None = None
+    max_retries: int = 0
+    on_reject: str | None = None
+    require_approval: bool = False
+    merge_strategy: str | None = None
+
+    @model_validator(mode="after")
+    def _infer_and_check_type(self) -> "Step":
+        if self.type is None:
+            if self.role is not None:
+                self.type = StepType.agent
+            else:
+                raise ValueError(
+                    f"step '{self.id}': cannot infer type — set `type` or `role`"
+                )
+        if self.type == StepType.agent and self.role is None:
+            raise ValueError(f"step '{self.id}': agent step requires `role`")
+        if self.type in (StepType.task, StepType.gate) and self.role is not None:
+            raise ValueError(
+                f"step '{self.id}': {self.type.value} step must not set `role`"
+            )
+        return self
+
+
+class Pipeline(_Strict):
+    name: str = ""  # populated from filename by the loader
+    mode: str = "declarative"  # declarative | agentic
+    inputs: dict[str, str] = Field(default_factory=dict)
+    steps: list[Step]
+
+    @model_validator(mode="after")
+    def _unique_step_ids(self) -> "Pipeline":
+        seen: set[str] = set()
+        for step in self.steps:
+            if step.id in seen:
+                raise ValueError(f"duplicate step id '{step.id}'")
+            seen.add(step.id)
+        return self
+
+
+class Defaults(_Strict):
+    isolation: Isolation = Isolation.worktree
+    mode: str = "declarative"
+    budget: Budget = Field(default_factory=Budget)
+    observability_sink: str = "sqlite"
+
+
+class Config(_Strict):
+    defaults: Defaults = Field(default_factory=Defaults)

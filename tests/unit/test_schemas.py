@@ -107,3 +107,62 @@ def test_core_and_index_knowledge():
 
     idx = KnowledgeSource.model_validate({"sources": ["docs/**", "src/**"], "backend": "lexical"})
     assert idx.backend == "lexical"
+
+
+def test_step_with_role_infers_agent_type():
+    from orchestrator.config.schemas import Step, StepType
+
+    s = Step.model_validate({"id": "implement", "role": "implementer", "needs": ["plan"]})
+    assert s.type == StepType.agent
+
+
+def test_explicit_task_step_has_no_role():
+    from orchestrator.config.schemas import Step, StepType
+
+    s = Step.model_validate(
+        {"id": "classify", "type": "task", "prompt": "Classify <task>"}
+    )
+    assert s.type == StepType.task
+    assert s.role is None
+
+
+def test_gate_step_rejects_role():
+    from pydantic import ValidationError
+
+    from orchestrator.config.schemas import Step
+
+    with pytest.raises(ValidationError):
+        Step.model_validate({"id": "approve", "type": "gate", "role": "auditor"})
+
+
+def test_step_without_role_or_type_is_rejected():
+    from pydantic import ValidationError
+
+    from orchestrator.config.schemas import Step
+
+    with pytest.raises(ValidationError):
+        Step.model_validate({"id": "mystery"})
+
+
+def test_pipeline_rejects_duplicate_step_ids():
+    from pydantic import ValidationError
+
+    from orchestrator.config.schemas import Pipeline
+
+    with pytest.raises(ValidationError):
+        Pipeline.model_validate(
+            {
+                "steps": [
+                    {"id": "a", "type": "task", "prompt": "x"},
+                    {"id": "a", "type": "task", "prompt": "y"},
+                ]
+            }
+        )
+
+
+def test_config_defaults():
+    from orchestrator.config.schemas import Config, Isolation
+
+    c = Config()
+    assert c.defaults.isolation == Isolation.worktree
+    assert c.defaults.mode == "declarative"
