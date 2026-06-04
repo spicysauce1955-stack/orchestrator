@@ -4,6 +4,7 @@ from pathlib import Path
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from orchestrator.config.loader import load_workspace
+from orchestrator.config.schemas import Step
 from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
 from orchestrator.observability.spans import (
     SPAN_SESSION,
@@ -72,3 +73,53 @@ async def test_agent_step_captures_diff_when_harness_edits(tmp_path, monkeypatch
 
     assert "note.txt" in artifact.diff
     assert artifact.branch.endswith("implement")
+
+
+async def test_success_criteria_retries_then_passes(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "default.ndjson"))
+    calls = tmp_path / "calls.log"
+    monkeypatch.setenv("ORCH_FAKE_CALLS", str(calls))
+
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    # success_criteria fails on attempt 1 (counter=1), passes on attempt 2 (counter>=2).
+    step = Step.model_validate({
+        "id": "impl_retry",
+        "role": "implementer",
+        "prompt": "do the work",
+        "success_criteria": (
+            "c=$(cat .c 2>/dev/null || echo 0); c=$((c+1)); echo $c > .c; test $c -ge 2"
+        ),
+        "max_retries": 2,
+    })
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    ctx = RunContext(run_id="rtry", inputs={"task": "t"})
+
+    artifact = await run_agent_step(
+        ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter
+    )
+
+    assert artifact.is_error is False           # passed within retry budget
+    assert len(calls.read_text().splitlines()) == 2  # harness re-prompted once
+    assert artifact.cost_usd > 0.01             # cost summed across 2 attempts
+
+
+async def test_success_criteria_fails_after_exhausting_retries(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "default.ndjson"))
+
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    step = Step.model_validate({
+        "id": "impl_fail",
+        "role": "implementer",
+        "prompt": "do the work",
+        "success_criteria": "false",
+        "max_retries": 1,
+    })
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    ctx = RunContext(run_id="fail", inputs={"task": "t"})
+
+    artifact = await run_agent_step(
+        ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter
+    )
+    assert artifact.is_error is True
