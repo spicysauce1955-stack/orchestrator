@@ -19,26 +19,26 @@ SPAN_FILE_EDIT = "file_edit"
 
 _TRACER_NAME = "orchestrator"
 
+_provider: TracerProvider | None = None
+
 
 def configure_tracing(exporter: SpanExporter | None = None) -> None:
-    """Install a TracerProvider. Always replaces the current provider.
+    """Install a fresh module-level TracerProvider. Tests inject an exporter.
 
-    If `exporter` is None, a no-op provider is installed (spans are created but
-    not exported) — callers that want output pass a concrete exporter.
-
-    Uses OTel's internal _set_tracer_provider with log=False to suppress the
-    "Overriding not allowed" warning; this is intentional for test isolation
-    where each test installs its own InMemorySpanExporter.
+    We keep the provider in a module-level variable rather than OpenTelemetry's
+    write-once global (`trace.set_tracer_provider` is silently ignored on the
+    2nd+ call per process), so each call — and each test — gets its own provider
+    and exporter without touching OTel internals.
     """
+    global _provider
     provider = TracerProvider()
     if exporter is not None:
         provider.add_span_processor(SimpleSpanProcessor(exporter))
-    # Force-reset the once-guard so the provider can be replaced (test isolation).
-    # This is necessary because OTel's set_tracer_provider only allows one call
-    # per process; tests need to swap exporters between test runs.
-    trace._TRACER_PROVIDER_SET_ONCE._done = False  # type: ignore[attr-defined]
-    trace._set_tracer_provider(provider, log=False)  # type: ignore[attr-defined]
+    _provider = provider
 
 
 def get_tracer() -> trace.Tracer:
-    return trace.get_tracer(_TRACER_NAME)
+    if _provider is None:
+        # No configure_tracing() call yet → OTel's no-op proxy tracer.
+        return trace.get_tracer(_TRACER_NAME)
+    return _provider.get_tracer(_TRACER_NAME)
