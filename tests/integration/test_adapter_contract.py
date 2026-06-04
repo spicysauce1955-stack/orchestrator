@@ -76,7 +76,9 @@ async def test_adapter_does_not_deadlock_on_large_stderr(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "plan.ndjson"))
     monkeypatch.setenv("ORCH_FAKE_STDERR_BYTES", "200000")  # ~200 KB of stderr
     adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
-    session = await adapter.start_session(cwd=tmp_path, caps=ResolvedCaps.read_only(), mcp_servers=[])
+    session = await adapter.start_session(
+        cwd=tmp_path, caps=ResolvedCaps.read_only(), mcp_servers=[]
+    )
     events = []
     stream = await adapter.prompt(session, "x")
     async for ev in stream:
