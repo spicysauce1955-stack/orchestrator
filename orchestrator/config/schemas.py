@@ -31,6 +31,11 @@ class StepType(str, Enum):
     gate = "gate"
 
 
+class Mode(str, Enum):
+    declarative = "declarative"
+    agentic = "agentic"
+
+
 class _Strict(BaseModel):
     """Base model that forbids unknown keys so config typos fail loudly."""
 
@@ -142,7 +147,7 @@ class Step(_Strict):
 
 class Pipeline(_Strict):
     name: str = ""  # populated from filename by the loader
-    mode: str = "declarative"  # declarative | agentic
+    mode: Mode = Mode.declarative
     inputs: dict[str, str] = Field(default_factory=dict)
     steps: list[Step]
 
@@ -158,7 +163,7 @@ class Pipeline(_Strict):
 
 class Defaults(_Strict):
     isolation: Isolation = Isolation.worktree
-    mode: str = "declarative"
+    mode: Mode = Mode.declarative
     budget: Budget = Field(default_factory=Budget)
     observability_sink: str = "sqlite"
 
