@@ -8,6 +8,14 @@ Split into three concerns:
 
 from __future__ import annotations
 
+import asyncio
+import json
+import uuid
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from pathlib import Path
+
+from orchestrator.harness.adapter import McpServer, SessionId
 from orchestrator.harness.events import (
     Cost,
     Done,
@@ -75,3 +83,103 @@ def parse_line(obj: dict, tool_names: dict[str, str]) -> list[Event]:
         ]
 
     return []
+
+
+@dataclass
+class _Session:
+    cwd: Path
+    caps: object  # ResolvedCaps — typed as object to avoid circular import at runtime
+    mcp_servers: list[McpServer]
+    harness_session_id: str | None = None
+
+
+class ClaudeCodeCLIAdapter:
+    """Drives Claude Code via `claude -p --output-format stream-json`.
+
+    `binary` is the command prefix (default `["claude"]`); tests inject the
+    fake harness. Honors $ORCH_CLAUDE_BIN when no binary is passed.
+    """
+
+    def __init__(self, binary: list[str] | None = None) -> None:
+        if binary is None:
+            import os
+
+            env_bin = os.environ.get("ORCH_CLAUDE_BIN")
+            binary = env_bin.split() if env_bin else ["claude"]
+        self._binary = binary
+        self._sessions: dict[SessionId, _Session] = {}
+
+    async def start_session(
+        self,
+        *,
+        cwd: Path,
+        caps: object,
+        mcp_servers: list[McpServer],
+    ) -> SessionId:
+        handle = uuid.uuid4().hex
+        self._sessions[handle] = _Session(cwd=Path(cwd), caps=caps, mcp_servers=list(mcp_servers))
+        return handle
+
+    async def prompt(
+        self,
+        session: SessionId,
+        text: str,
+        *,
+        output_schema: dict | None = None,
+    ) -> AsyncIterator[Event]:
+        sess = self._sessions[session]
+        flags = self.translate(sess.caps, cwd=sess.cwd)
+        cmd = [
+            *self._binary,
+            "-p",
+            text,
+            "--output-format",
+            "stream-json",
+            *flags,
+        ]
+        return self._stream(session, cmd)
+
+    async def _stream(self, session: SessionId, cmd: list[str]) -> AsyncIterator[Event]:
+        sess = self._sessions[session]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(sess.cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        tool_names: dict[str, str] = {}
+        saw_done = False
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            line = raw.decode().strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for ev in parse_line(obj, tool_names):
+                if isinstance(ev, SessionStarted):
+                    sess.harness_session_id = ev.session_id
+                if isinstance(ev, Done):
+                    saw_done = True
+                yield ev
+        returncode = await proc.wait()
+        if returncode != 0:
+            # A non-zero harness exit is a failure regardless of streamed result.
+            yield Done(result=f"harness exited {returncode}", is_error=True)
+        elif not saw_done:
+            yield Done(result="", is_error=True)
+
+    async def resume(self, session: SessionId) -> SessionId:
+        # Re-prompting a resumed session would pass `--resume <harness_session_id>`;
+        # full re-prompt wiring lands with the DAG executor (M3). M2 only needs
+        # the handle to remain valid.
+        return session
+
+    async def cancel(self, session: SessionId) -> None:
+        self._sessions.pop(session, None)
+
+    def translate(self, caps: object, *, cwd: Path | None = None) -> list[str]:
+        # Implemented in Task 10.
+        return []
