@@ -16,6 +16,7 @@ from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tr
 from orchestrator.runtime.controller import make_controller
 from orchestrator.runtime.executors import run_agent_step
 from orchestrator.runtime.state import RunContext
+from orchestrator.runtime.template import TemplateError
 
 app = typer.Typer(help="Declarative multi-vendor coding-agent orchestrator.")
 
@@ -123,7 +124,15 @@ def run(
                 run_span.set_attribute("pipeline", pipeline)
                 return await run_agent_step(workspace, pipe, step, ctx, repo=repo, adapter=adapter)
 
-        artifact = asyncio.run(_one())
+        try:
+            artifact = asyncio.run(_one())
+        except TemplateError as exc:
+            typer.echo(f"error: cannot render step '{only}' in isolation: {exc}")
+            typer.echo(
+                "hint: this step references another step's output — run the full "
+                "pipeline (omit --only)."
+            )
+            raise typer.Exit(1) from exc
         _print_artifact(artifact, run_id)
         if artifact.is_error:
             raise typer.Exit(1)
@@ -136,7 +145,11 @@ def run(
         typer.echo(f"error: {exc}")
         raise typer.Exit(2) from exc
 
-    ctx = asyncio.run(controller.run(pipe, {"task": task}, run_id))
+    try:
+        ctx = asyncio.run(controller.run(pipe, {"task": task}, run_id))
+    except TemplateError as exc:
+        typer.echo(f"error: template reference failed during run: {exc}")
+        raise typer.Exit(1) from exc
 
     typer.echo(f"run {run_id}: pipeline '{pipeline}' ({len(ctx.artifacts)} steps)")
     any_error = False
