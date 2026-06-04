@@ -58,10 +58,10 @@ def validate_dag(pipeline: Pipeline) -> list[str]:
             if dep == step.id:
                 errors.append(f"step '{step.id}' cannot depend on itself")
 
-    # Cycles in the forward (needs-only) graph are undeclared cycles.
-    if all(d in id_set for s in pipeline.steps for d in s.needs):
-        if _has_cycle(ids, deps):
-            errors.append("pipeline has an undeclared cycle in `needs` edges")
+    # `_has_cycle` is robust to dangling deps (deps keyed by all step ids), so we
+    # always run it — dangling-need and cycle errors can both surface.
+    if _has_cycle(ids, deps):
+        errors.append("pipeline has an undeclared cycle in `needs` edges")
 
     for step in pipeline.steps:
         if step.on_reject is None:
@@ -79,46 +79,60 @@ def validate_dag(pipeline: Pipeline) -> list[str]:
     return errors
 
 
-_REF = re.compile(r"<([a-zA-Z_][\w.-]*)>")
+_REF = re.compile(r"\{\{\s*([a-zA-Z_][\w.-]*)\s*\}\}")
 
 
 def validate_typed_io(pipeline: Pipeline) -> list[str]:
     errors: list[str] = []
     by_id = {s.id: s for s in pipeline.steps}
+    deps = {s.id: list(s.needs) for s in pipeline.steps}
     inputs = set(pipeline.inputs)
 
     for step in pipeline.steps:
         if not step.prompt:
             continue
+        ancestors = _ancestors(step.id, deps)
         for token in _REF.findall(step.prompt):
             parts = token.split(".")
             head = parts[0]
 
-            # Bare <name> -> pipeline input.
+            # {{name}} -> pipeline input.
             if len(parts) == 1:
                 if head not in inputs:
                     errors.append(
-                        f"step '{step.id}': reference <{token}> matches no pipeline input"
+                        f"step '{step.id}': reference {{{{{token}}}}} matches no pipeline input"
                     )
                 continue
 
-            # <stepid.output[.field]> -> another step's output.
+            # {{stepid.output[.field]}} -> a prior (ancestor) step's output.
             if head not in by_id:
                 errors.append(
-                    f"step '{step.id}': reference <{token}> targets unknown step '{head}'"
+                    f"step '{step.id}': reference {{{{{token}}}}} targets unknown step '{head}'"
                 )
                 continue
-            if len(parts) >= 2 and parts[1] != "output":
+            if head not in ancestors:
                 errors.append(
-                    f"step '{step.id}': reference <{token}> must use '.output' "
+                    f"step '{step.id}': reference {{{{{token}}}}} must point to an ancestor "
+                    f"step (add '{head}' to needs)"
+                )
+                continue
+            if parts[1] != "output":
+                errors.append(
+                    f"step '{step.id}': reference {{{{{token}}}}} must use '.output' "
                     f"(got '.{parts[1]}')"
+                )
+                continue
+            if len(parts) > 3:
+                errors.append(
+                    f"step '{step.id}': reference {{{{{token}}}}} is too deeply nested "
+                    f"(max 3 segments)"
                 )
                 continue
             if len(parts) == 3:
                 schema = by_id[head].output_schema or {}
                 if parts[2] not in schema:
                     errors.append(
-                        f"step '{step.id}': reference <{token}> field '{parts[2]}' not in "
+                        f"step '{step.id}': reference {{{{{token}}}}} field '{parts[2]}' not in "
                         f"output_schema of '{head}'"
                     )
 

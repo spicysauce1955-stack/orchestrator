@@ -149,7 +149,7 @@ class ClaudeCodeCLIAdapter:
             *cmd,
             cwd=str(sess.cwd),
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
         tool_names: dict[str, str] = {}
         saw_done = False

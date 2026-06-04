@@ -1,9 +1,11 @@
 import sys
 from pathlib import Path
 
+import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from orchestrator.config.loader import load_workspace
+from orchestrator.config.schemas import Step
 from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
 from orchestrator.observability.spans import (
     SPAN_SESSION,
@@ -13,6 +15,7 @@ from orchestrator.observability.spans import (
 )
 from orchestrator.runtime.executors import run_agent_step
 from orchestrator.runtime.state import RunContext
+from orchestrator.runtime.template import TemplateError
 from tests.fixtures.repo import make_repo
 
 FAKE = Path(__file__).parent.parent / "fixtures" / "fake_harness" / "fake_harness.py"
@@ -72,3 +75,75 @@ async def test_agent_step_captures_diff_when_harness_edits(tmp_path, monkeypatch
 
     assert "note.txt" in artifact.diff
     assert artifact.branch.endswith("implement")
+
+
+async def test_success_criteria_retries_then_passes(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "default.ndjson"))
+    calls = tmp_path / "calls.log"
+    monkeypatch.setenv("ORCH_FAKE_CALLS", str(calls))
+
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    # success_criteria fails on attempt 1 (counter=1), passes on attempt 2 (counter>=2).
+    step = Step.model_validate({
+        "id": "impl_retry",
+        "role": "implementer",
+        "prompt": "do the work",
+        "success_criteria": (
+            "c=$(cat .c 2>/dev/null || echo 0); c=$((c+1)); echo $c > .c; test $c -ge 2"
+        ),
+        "max_retries": 2,
+    })
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    ctx = RunContext(run_id="rtry", inputs={"task": "t"})
+
+    artifact = await run_agent_step(
+        ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter
+    )
+
+    assert artifact.is_error is False           # passed within retry budget
+    # Each invocation logs prompt[:60]; count entries starting with base prompt.
+    log_lines = calls.read_text().splitlines()
+    invocations = sum(1 for ln in log_lines if ln.startswith("do the work"))
+    assert invocations == 2                     # harness re-prompted once
+    assert artifact.cost_usd > 0.01             # cost summed across 2 attempts
+
+
+async def test_success_criteria_fails_after_exhausting_retries(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "default.ndjson"))
+
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    step = Step.model_validate({
+        "id": "impl_fail",
+        "role": "implementer",
+        "prompt": "do the work",
+        "success_criteria": "false",
+        "max_retries": 1,
+    })
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    ctx = RunContext(run_id="fail", inputs={"task": "t"})
+
+    artifact = await run_agent_step(
+        ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter
+    )
+    assert artifact.is_error is True
+
+
+async def test_bad_template_ref_raises_template_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "default.ndjson"))
+
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    step = Step.model_validate({
+        "id": "impl_bad_ref",
+        "role": "implementer",
+        "prompt": "use {{nonexistent}}",
+    })
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    ctx = RunContext(run_id="tmpl", inputs={"task": "t"})
+
+    with pytest.raises(TemplateError):
+        await run_agent_step(
+            ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter
+        )

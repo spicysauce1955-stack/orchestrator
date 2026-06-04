@@ -1,11 +1,9 @@
-"""Step executors. M2 implements the AgentStep lifecycle for a single step.
-
-Out of M2 scope (later milestones): success_criteria + retry (M3), the review
-loop (M4), knowledge injection (M6), the full DAG controller (M3).
-"""
+"""Step executors (spec §6). M3 adds task steps + the success_criteria/retry loop."""
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -22,25 +20,21 @@ from orchestrator.observability.spans import (
     get_tracer,
 )
 from orchestrator.runtime.state import Artifact, RunContext
-from orchestrator.safety.capabilities import resolve_capabilities
+from orchestrator.runtime.template import render_template
+from orchestrator.safety.capabilities import ResolvedCaps, resolve_capabilities
 
-# Default prompts when a step declares no `prompt` (M2 minimal rendering).
+# Default prompts when a step declares no `prompt`.
 _DEFAULT_PROMPTS = {
     "planner": "Create a concise implementation plan for this task:\n\n{task}",
 }
 
 
-def _render_prompt(step: Step, role_name: str, inputs: dict[str, str]) -> str:
-    """Render the step prompt. M2: literal substitution of declared top-level
-    input names only (`<task>` → value). Full dataflow templating is M3."""
-    template = step.prompt
-    if template is None:
-        default = _DEFAULT_PROMPTS.get(role_name, "Work on this task:\n\n{task}")
-        return default.format(task=inputs.get("task", ""))
-    rendered = template
-    for name, value in inputs.items():
-        rendered = rendered.replace(f"<{name}>", value)
-    return rendered
+def _render_prompt(step: Step, role_name: str | None, ctx: RunContext) -> str:
+    """Render a step's prompt with {{...}} templating over inputs + prior outputs."""
+    if step.prompt is None:
+        default = _DEFAULT_PROMPTS.get(role_name or "", "Work on this task:\n\n{task}")
+        return default.format(task=ctx.inputs.get("task", ""))
+    return render_template(step.prompt, ctx.inputs, ctx.artifacts)
 
 
 def _capture_diff(cwd: Path) -> str:
@@ -60,6 +54,66 @@ def _capture_diff(cwd: Path) -> str:
     return tracked
 
 
+def _run_success_criteria(criteria: str, cwd: Path) -> tuple[bool, str]:
+    """Run the success_criteria shell command in `cwd`. Returns (ok, combined output)."""
+    proc = subprocess.run(
+        criteria, cwd=cwd, shell=True, capture_output=True, text=True
+    )
+    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+
+
+class _Aggregate:
+    """Mutable accumulator for one harness drive."""
+
+    def __init__(self) -> None:
+        self.text_parts: list[str] = []
+        self.result_text = ""
+        self.cost_usd = 0.0
+        self.tokens = 0
+        self.is_error = False
+
+    @property
+    def output(self) -> str:
+        return "".join(self.text_parts) or self.result_text
+
+
+async def _drive_harness(
+    adapter: HarnessAdapter,
+    caps: ResolvedCaps,
+    cwd: Path,
+    prompt: str,
+    output_schema: dict | None,
+    tracer,
+) -> _Aggregate:
+    """Start a session, stream events into session/tool/file spans, aggregate."""
+    agg = _Aggregate()
+    session = await adapter.start_session(cwd=cwd, caps=caps, mcp_servers=[])
+    with tracer.start_as_current_span(SPAN_SESSION) as sess_span:
+        stream = await adapter.prompt(session, prompt, output_schema=output_schema)
+        async for ev in stream:
+            if isinstance(ev, MessageChunk):
+                agg.text_parts.append(ev.text)
+            elif isinstance(ev, ToolCall):
+                with tracer.start_as_current_span(SPAN_TOOL_CALL) as tc:
+                    tc.set_attribute("tool.name", ev.name)
+                    tc.set_attribute("tool.status", ev.status)
+            elif isinstance(ev, FileEdit):
+                with tracer.start_as_current_span(SPAN_FILE_EDIT) as fe:
+                    fe.set_attribute("file.path", ev.path)
+                    fe.set_attribute("file.kind", ev.kind)
+            elif isinstance(ev, Cost):
+                agg.cost_usd += ev.usd
+                agg.tokens += ev.tokens
+                sess_span.set_attribute("cost.usd", ev.usd)
+                sess_span.set_attribute("cost.tokens", ev.tokens)
+            elif isinstance(ev, Done):
+                agg.result_text = ev.result
+                agg.is_error = ev.is_error
+                sess_span.set_attribute("done.is_error", ev.is_error)
+        sess_span.set_attribute("session.handle", session)
+    return agg
+
+
 async def run_agent_step(
     workspace: Workspace,
     pipeline: Pipeline,
@@ -69,73 +123,155 @@ async def run_agent_step(
     repo: Path,
     adapter: HarnessAdapter,
 ) -> Artifact:
-    """Run a single agent step end-to-end (spec §6 AgentStep, M2 subset)."""
+    """Run one agent step end-to-end: worktree → harness drive → success_criteria/retry."""
     if step.role is None:
         raise ValueError(f"step '{step.id}' is not an agent step (no role)")
     role = workspace.roles[step.role]
     caps = resolve_capabilities(role, workspace)
-
     branch = f"orch/{ctx.run_id}/{step.id}"
-    worktree = create_worktree(Path(repo), branch=branch)
 
     tracer = get_tracer()
-    text_parts: list[str] = []
-    result_text = ""
-    cost_usd = 0.0
-    tokens = 0
+    total_cost = 0.0
+    total_tokens = 0
+    output = ""
     is_error = False
 
+    worktree = create_worktree(Path(repo), branch=branch)
     try:
         with tracer.start_as_current_span(SPAN_STEP) as step_span:
             step_span.set_attribute("step.id", step.id)
             step_span.set_attribute("step.role", step.role)
             step_span.set_attribute("step.harness", role.harness.value)
 
-            prompt = _render_prompt(step, step.role, ctx.inputs)
-            session = await adapter.start_session(
-                cwd=worktree.path, caps=caps, mcp_servers=[]
-            )
+            base_prompt = _render_prompt(step, step.role, ctx)
+            feedback: str | None = None
+            for attempt in range(step.max_retries + 1):
+                if feedback is None:
+                    prompt = base_prompt
+                else:
+                    prompt = (
+                        f"{base_prompt}\n\nThe previous attempt failed"
+                        f" `success_criteria`:\n{feedback}\nFix the issues and try again."
+                    )
+                agg = await _drive_harness(
+                    adapter, caps, worktree.path, prompt, step.output_schema, tracer
+                )
+                total_cost += agg.cost_usd
+                total_tokens += agg.tokens
+                output = agg.output
+                is_error = agg.is_error
 
-            with tracer.start_as_current_span(SPAN_SESSION) as sess_span:
-                stream = await adapter.prompt(session, prompt, output_schema=step.output_schema)
-                async for ev in stream:
-                    if isinstance(ev, MessageChunk):
-                        text_parts.append(ev.text)
-                    elif isinstance(ev, ToolCall):
-                        with tracer.start_as_current_span(SPAN_TOOL_CALL) as tc:
-                            tc.set_attribute("tool.name", ev.name)
-                            tc.set_attribute("tool.status", ev.status)
-                    elif isinstance(ev, FileEdit):
-                        with tracer.start_as_current_span(SPAN_FILE_EDIT) as fe:
-                            fe.set_attribute("file.path", ev.path)
-                            fe.set_attribute("file.kind", ev.kind)
-                    elif isinstance(ev, Cost):
-                        cost_usd = ev.usd
-                        tokens = ev.tokens
-                        sess_span.set_attribute("cost.usd", ev.usd)
-                        sess_span.set_attribute("cost.tokens", ev.tokens)
-                    elif isinstance(ev, Done):
-                        result_text = ev.result
-                        is_error = ev.is_error
-                        sess_span.set_attribute("done.is_error", ev.is_error)
-                sess_span.set_attribute("session.handle", session)
+                if not step.success_criteria:
+                    break
+                ok, crit_out = _run_success_criteria(step.success_criteria, worktree.path)
+                step_span.set_attribute(f"success_criteria.attempt_{attempt}", ok)
+                if ok:
+                    is_error = False
+                    break
+                if attempt >= step.max_retries:
+                    is_error = True
+                    output = f"{output}\n[success_criteria failed after {attempt + 1} attempt(s)]"
+                    break
+                feedback = crit_out
 
             diff = _capture_diff(worktree.path)
             step_span.set_attribute("step.is_error", is_error)
 
-        output = "".join(text_parts) or result_text
         artifact = Artifact(
             step_id=step.id,
             output=output,
             diff=diff,
             branch=branch,
-            cost_usd=cost_usd,
-            tokens=tokens,
+            cost_usd=total_cost,
+            tokens=total_tokens,
             is_error=is_error,
         )
         ctx.record(artifact)
         return artifact
     finally:
-        # M2: worktrees are cleaned up after a step. (Retain-on-failure is M3.)
-        # NOTE: diff capture happens BEFORE this cleanup, inside the try block.
         remove_worktree(Path(repo), worktree)
+
+
+_ENUM_RE = re.compile(r"enum\[([^\]]*)\]")
+
+
+def _parse_task_output(output: str, output_schema: dict | None) -> tuple[dict | None, bool]:
+    """Parse a task step's textual output into structured output_data.
+
+    MVP: if output_schema declares a single enum field, accept either a JSON object
+    {field: value} or a bare value, and validate enum membership. Returns
+    (output_data, is_error). With no output_schema, output_data is None (ok).
+    """
+    if not output_schema:
+        return None, False
+
+    # Try JSON first.
+    data: dict | None = None
+    try:
+        loaded = json.loads(output)
+        if isinstance(loaded, dict):
+            data = loaded
+    except (json.JSONDecodeError, TypeError):
+        data = None
+
+    # Validate each enum-typed field.
+    for field_name, spec in output_schema.items():
+        allowed = None
+        if isinstance(spec, str):
+            m = _ENUM_RE.fullmatch(spec.strip())
+            if m:
+                allowed = [v.strip() for v in m.group(1).split(",") if v.strip()]
+        if allowed is None:
+            continue
+        value = None
+        if data is not None and field_name in data:
+            value = str(data[field_name]).strip()
+        elif len(output_schema) == 1:
+            value = output.strip()  # bare value for a single-field schema
+        if value not in allowed:
+            return None, True
+        data = {**(data or {}), field_name: value}
+
+    return data, False
+
+
+async def run_task_step(
+    workspace: Workspace,
+    pipeline: Pipeline,
+    step: Step,
+    ctx: RunContext,
+    *,
+    repo: Path,
+    adapter: HarnessAdapter,
+) -> Artifact:
+    """Run a `task` step (cheap LLM glue): read-only, no worktree, parse output."""
+    if step.merge_strategy is not None:
+        raise NotImplementedError(f"merge task step '{step.id}' runs in M5")
+
+    caps = ResolvedCaps.read_only()
+    tracer = get_tracer()
+    prompt = _render_prompt(step, None, ctx)
+
+    with tracer.start_as_current_span(SPAN_STEP) as step_span:
+        step_span.set_attribute("step.id", step.id)
+        step_span.set_attribute("step.type", "task")
+        agg = await _drive_harness(
+            adapter, caps, Path(repo), prompt, step.output_schema, tracer
+        )
+        output = agg.result_text or agg.output  # task output is the final result text
+        output_data, parse_error = _parse_task_output(output, step.output_schema)
+        is_error = agg.is_error or parse_error
+        step_span.set_attribute("step.is_error", is_error)
+
+    artifact = Artifact(
+        step_id=step.id,
+        output=output,
+        diff="",
+        branch="",
+        cost_usd=agg.cost_usd,
+        tokens=agg.tokens,
+        is_error=is_error,
+        output_data=output_data,
+    )
+    ctx.record(artifact)
+    return artifact

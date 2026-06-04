@@ -1,0 +1,17 @@
+# Linear M3 demo: classify (task) -> plan (agent) -> implement (agent).
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: classify
+    type: task
+    prompt: 'Classify {{task}} as exactly one of: bugfix | feature | refactor. Reply with JSON {"kind": "<one>"}.'
+    output_schema: { kind: "enum[bugfix,feature,refactor]" }
+  - id: plan
+    role: planner
+    needs: [classify]
+    prompt: "Task: {{task}}\nKind: {{classify.output.kind}}\nWrite a short implementation plan."
+  - id: implement
+    role: implementer
+    needs: [plan]
+    prompt: "Implement this plan:\n{{plan.output}}"
+    success_criteria: "true"

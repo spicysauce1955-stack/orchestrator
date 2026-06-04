@@ -45,17 +45,18 @@ def _placeholder_node(state: RunState) -> dict:
     return {}
 
 
-def to_state_graph(pipeline: Pipeline, ir: GraphIR):
-    builder = StateGraph(RunState)
-    for node in ir.nodes:
-        builder.add_node(node, _placeholder_node)
+def wire_edges(builder, ir: GraphIR, *, router=None) -> None:
+    """Wire START/END + step edges onto `builder` from the IR.
 
+    Conditional sources get a single router over their targets. `router` is a
+    callable (source, targets) -> routing-fn; if None, a forward-only router
+    (always the first target) is used. M4 supplies a verdict-aware router.
+    """
     for entry in ir.entrypoints:
         builder.add_edge(START, entry)
     for terminal in ir.terminals:
         builder.add_edge(terminal, END)
 
-    # Group outgoing edges by source so conditional sources get a single router.
     outgoing: dict[str, list] = {}
     for edge in ir.edges:
         outgoing.setdefault(edge.source, []).append(edge)
@@ -63,17 +64,26 @@ def to_state_graph(pipeline: Pipeline, ir: GraphIR):
     for source, edges in outgoing.items():
         if any(e.conditional for e in edges):
             targets = [e.target for e in edges]
-
-            def _router(state: RunState, _targets=targets) -> str:
-                # M1 placeholder: forward path is deterministic. The verdict-driven
-                # branch is implemented with the review loop in M4.
-                return _targets[0]
-
-            builder.add_conditional_edges(source, _router, targets)
+            if router is not None:
+                route_fn = router(source, targets)
+            else:
+                # Forward-only default: pick the first target. This relies on
+                # `build_ir` emitting forward (`needs`) edges BEFORE `on_reject`
+                # back-edges, so targets[0] is the forward successor and the graph
+                # stays acyclic in M3. M4 passes a verdict-aware router instead.
+                def route_fn(state, _targets=targets):
+                    return _targets[0]
+            builder.add_conditional_edges(source, route_fn, targets)
         else:
             for edge in edges:
                 builder.add_edge(edge.source, edge.target)
 
+
+def to_state_graph(pipeline: Pipeline, ir: GraphIR):
+    builder = StateGraph(RunState)
+    for node in ir.nodes:
+        builder.add_node(node, _placeholder_node)
+    wire_edges(builder, ir)
     return builder.compile()
 
 

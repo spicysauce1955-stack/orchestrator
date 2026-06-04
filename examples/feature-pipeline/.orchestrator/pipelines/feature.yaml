@@ -3,7 +3,7 @@ inputs: { task: string }
 steps:
   - id: classify
     type: task
-    prompt: "Classify <task> as: bugfix | feature | refactor"
+    prompt: "Classify {{task}} as: bugfix | feature | refactor"
     output_schema: { kind: "enum[bugfix,feature,refactor]" }
   - id: plan
     role: planner

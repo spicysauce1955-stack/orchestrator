@@ -1,6 +1,12 @@
-"""Runtime layer: run state + step executors (spec §6)."""
+"""Runtime layer: run state + step executors + scheduler (spec §6)."""
 
-from orchestrator.runtime.executors import run_agent_step
-from orchestrator.runtime.state import Artifact, RunContext
+from orchestrator.runtime.controller import make_controller
+from orchestrator.runtime.executors import run_agent_step, run_task_step
+from orchestrator.runtime.scheduler import DeterministicScheduler
+from orchestrator.runtime.state import Artifact, GraphState, RunContext
 
-__all__ = ["Artifact", "RunContext", "run_agent_step"]
+__all__ = [
+    "Artifact", "GraphState", "RunContext",
+    "run_agent_step", "run_task_step",
+    "DeterministicScheduler", "make_controller",
+]

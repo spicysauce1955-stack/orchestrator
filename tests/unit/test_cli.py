@@ -59,8 +59,9 @@ def test_compile_unknown_pipeline_exits_one(tmp_path):
     assert result.exit_code == 1
 
 
-def test_run_requires_only_flag(tmp_path):
-    # M2: `run` without --only exits 2 with a message mentioning "only".
-    result = runner.invoke(app, ["run", "feature"])
-    assert result.exit_code == 2
-    assert "only" in result.stdout.lower()
+def test_run_unknown_pipeline_exits_one(tmp_path):
+    # M3: run without --only attempts the full pipeline; unknown pipeline exits 1.
+    base = _good_workspace(tmp_path)
+    result = runner.invoke(app, ["run", "nonexistent", "--root", str(base)])
+    assert result.exit_code == 1
+    assert "nonexistent" in result.stdout

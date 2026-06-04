@@ -1,4 +1,4 @@
-"""orch CLI. M1 implements `compile`; M2 implements `run --only`."""
+"""orch CLI. M1 implements `compile`; M2 implements `run --only`; M3 runs the full pipeline."""
 
 from __future__ import annotations
 
@@ -13,10 +13,27 @@ from orchestrator.config.loader import ConfigError, load_workspace
 from orchestrator.config.schemas import StepType
 from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
 from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tracer
+from orchestrator.runtime.controller import make_controller
 from orchestrator.runtime.executors import run_agent_step
 from orchestrator.runtime.state import RunContext
+from orchestrator.runtime.template import TemplateError
 
 app = typer.Typer(help="Declarative multi-vendor coding-agent orchestrator.")
+
+
+def _print_artifact(artifact, run_id, *, brief: bool = False) -> None:
+    status_word = "ERROR" if artifact.is_error else "OK"
+    typer.echo(f"{status_word}: step '{artifact.step_id}' (run {run_id})")
+    if artifact.branch:
+        typer.echo(f"  branch: {artifact.branch}")
+    typer.echo(f"  cost: ${artifact.cost_usd:.4f} ({artifact.tokens} tokens)")
+    if artifact.output_data:
+        typer.echo(f"  output_data: {artifact.output_data}")
+    if artifact.diff:
+        typer.echo(f"  diff: {len(artifact.diff.splitlines())} line(s) changed")
+    if not brief:
+        typer.echo("---- output ----")
+        typer.echo(artifact.output)
 
 
 @app.command()
@@ -61,7 +78,7 @@ def run(
     pipeline: str = typer.Argument(..., help="Pipeline name (file stem under pipelines/)."),
     task: str = typer.Option("", "--task", help="Value for the pipeline's `task` input."),
     only: str = typer.Option(
-        "", "--only", help="Run exactly one agent step by id (required in M2)."
+        "", "--only", help="Run exactly one agent step by id (M2 single-step mode)."
     ),
     root: Path = typer.Option(
         Path(".orchestrator"), "--root", help="Path to the .orchestrator/ workspace."
@@ -70,11 +87,7 @@ def run(
         Path("."), "--repo", help="Git repo to create the step's worktree in."
     ),
 ) -> None:
-    """Run a pipeline. M2 runs a single agent step via --only; the full DAG is M3."""
-    if not only:
-        typer.echo("error: M2 can only run one agent step — pass --only <step_id>.")
-        raise typer.Exit(2)
-
+    """Run a pipeline (M3: full DAG) or a single step (--only <step_id>)."""
     try:
         workspace = load_workspace(root)
     except ConfigError as exc:
@@ -87,38 +100,67 @@ def run(
         typer.echo(f"error: unknown pipeline '{pipeline}'; available: {available}")
         raise typer.Exit(1)
 
-    step = next((s for s in pipe.steps if s.id == only), None)
-    if step is None:
-        typer.echo(f"error: pipeline '{pipeline}' has no step '{only}'.")
-        raise typer.Exit(1)
-    if step.type is not StepType.agent:
-        typer.echo(
-            f"error: step '{only}' is type '{step.type.value}'; M2 runs agent steps only."
-        )
-        raise typer.Exit(2)
-
     configure_tracing(exporter=None)
     adapter = ClaudeCodeCLIAdapter()  # honors $ORCH_CLAUDE_BIN
-    ctx = RunContext(run_id=uuid.uuid4().hex[:8], inputs={"task": task})
+    run_id = uuid.uuid4().hex[:8]
 
-    async def _go():
-        tracer = get_tracer()
-        with tracer.start_as_current_span(SPAN_RUN) as run_span:
-            run_span.set_attribute("run.id", ctx.run_id)
-            run_span.set_attribute("pipeline", pipeline)
-            return await run_agent_step(workspace, pipe, step, ctx, repo=repo, adapter=adapter)
+    # Single-step mode (M2 behavior, still supported).
+    if only:
+        step = next((s for s in pipe.steps if s.id == only), None)
+        if step is None:
+            typer.echo(f"error: pipeline '{pipeline}' has no step '{only}'.")
+            raise typer.Exit(1)
+        if step.type is not StepType.agent:
+            typer.echo(
+                f"error: step '{only}' is type '{step.type.value}'; --only runs agent steps."
+            )
+            raise typer.Exit(2)
+        ctx = RunContext(run_id=run_id, inputs={"task": task})
 
-    artifact = asyncio.run(_go())
+        async def _one():
+            tracer = get_tracer()
+            with tracer.start_as_current_span(SPAN_RUN) as run_span:
+                run_span.set_attribute("run.id", run_id)
+                run_span.set_attribute("pipeline", pipeline)
+                return await run_agent_step(workspace, pipe, step, ctx, repo=repo, adapter=adapter)
 
-    status_word = "ERROR" if artifact.is_error else "OK"
-    typer.echo(f"{status_word}: step '{artifact.step_id}' (run {ctx.run_id})")
-    typer.echo(f"  branch: {artifact.branch}")
-    typer.echo(f"  cost: ${artifact.cost_usd:.4f} ({artifact.tokens} tokens)")
-    if artifact.diff:
-        typer.echo(f"  diff: {len(artifact.diff.splitlines())} line(s) changed")
-    typer.echo("---- output ----")
-    typer.echo(artifact.output)
-    if artifact.is_error:
+        try:
+            artifact = asyncio.run(_one())
+        except TemplateError as exc:
+            typer.echo(f"error: cannot render step '{only}' in isolation: {exc}")
+            typer.echo(
+                "hint: this step references another step's output — run the full "
+                "pipeline (omit --only)."
+            )
+            raise typer.Exit(1) from exc
+        _print_artifact(artifact, run_id)
+        if artifact.is_error:
+            raise typer.Exit(1)
+        return
+
+    # Full-pipeline mode (M3).
+    try:
+        controller = make_controller(pipe.mode, workspace, adapter, repo)
+    except NotImplementedError as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(2) from exc
+
+    try:
+        ctx = asyncio.run(controller.run(pipe, {"task": task}, run_id))
+    except TemplateError as exc:
+        typer.echo(f"error: template reference failed during run: {exc}")
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"run {run_id}: pipeline '{pipeline}' ({len(ctx.artifacts)} steps)")
+    any_error = False
+    for step in pipe.steps:
+        art = ctx.artifacts.get(step.id)
+        if art is None:
+            continue  # not reached on this path (e.g. conditional branch)
+        any_error = any_error or art.is_error
+        _print_artifact(art, run_id, brief=True)
+    typer.echo(f"total cost: ${ctx.total_cost_usd:.4f}")
+    if any_error:
         raise typer.Exit(1)
 
 
