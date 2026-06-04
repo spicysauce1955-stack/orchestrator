@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"fake-plan-1","tools":["Read","Grep","Glob"],"cwd":"."}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Here is the plan: "}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"README.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"file contents"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"1. do X 2. do Y"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Plan complete","total_cost_usd":0.012,"usage":{"input_tokens":100,"output_tokens":50},"session_id":"fake-plan-1"}

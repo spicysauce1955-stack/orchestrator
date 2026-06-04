@@ -98,6 +98,14 @@ def _resolve_references(ws: Workspace) -> None:
         for source in role.knowledge:
             if source not in known_knowledge:
                 errors.append(f"role '{role.name}' references unknown knowledge '{source}'")
+        if role.access is not None and role.access.knowledge is not None:
+            ka = role.access.knowledge
+            for source in (*ka.read, *ka.write):
+                if source not in known_knowledge:
+                    errors.append(
+                        f"role '{role.name}' access.knowledge references unknown "
+                        f"source '{source}'"
+                    )
 
     for skill in ws.skills.values():
         for source in skill.knowledge:

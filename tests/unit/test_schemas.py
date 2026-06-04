@@ -166,3 +166,20 @@ def test_config_defaults():
     c = Config()
     assert c.defaults.isolation == Isolation.worktree
     assert c.defaults.mode == "declarative"
+
+
+def test_pipeline_mode_rejects_typo():
+    import pytest
+    from pydantic import ValidationError
+
+    from orchestrator.config.schemas import Mode, Pipeline
+
+    p = Pipeline.model_validate(
+        {"mode": "declarative", "steps": [{"id": "a", "type": "task", "prompt": "x"}]}
+    )
+    assert p.mode is Mode.declarative
+
+    with pytest.raises(ValidationError):
+        Pipeline.model_validate(
+            {"mode": "declaritive", "steps": [{"id": "a", "type": "task", "prompt": "x"}]}
+        )
