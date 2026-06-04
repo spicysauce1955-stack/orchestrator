@@ -10,6 +10,10 @@ def _p(steps: list[dict]) -> Pipeline:
     return Pipeline.model_validate({"steps": steps})
 
 
+def _pipe(steps, inputs=None):
+    return Pipeline.model_validate({"inputs": inputs or {}, "steps": steps})
+
+
 def test_valid_linear_pipeline_has_no_errors():
     p = _p(
         [
@@ -69,11 +73,14 @@ def test_on_reject_must_point_upstream():
     assert any("upstream" in e.lower() for e in errors)
 
 
+# --- validate_typed_io tests ({{...}} syntax) ---
+
+
 def test_input_reference_resolves():
     p = Pipeline.model_validate(
         {
             "inputs": {"task": "string"},
-            "steps": [{"id": "classify", "type": "task", "prompt": "Classify <task>"}],
+            "steps": [{"id": "classify", "type": "task", "prompt": "Classify {{task}}"}],
         }
     )
     assert validate_typed_io(p) == []
@@ -83,7 +90,7 @@ def test_unknown_input_reference_reported():
     p = Pipeline.model_validate(
         {
             "inputs": {"task": "string"},
-            "steps": [{"id": "classify", "type": "task", "prompt": "Use <goal>"}],
+            "steps": [{"id": "classify", "type": "task", "prompt": "Use {{goal}}"}],
         }
     )
     errors = validate_typed_io(p)
@@ -103,7 +110,7 @@ def test_step_output_reference_resolves():
                 {
                     "id": "plan",
                     "type": "task",
-                    "prompt": "Plan for <classify.output.kind>",
+                    "prompt": "Plan for {{classify.output.kind}}",
                     "needs": ["classify"],
                 },
             ]
@@ -125,7 +132,7 @@ def test_unknown_step_output_field_reported():
                 {
                     "id": "plan",
                     "type": "task",
-                    "prompt": "Plan <classify.output.missing>",
+                    "prompt": "Plan {{classify.output.missing}}",
                     "needs": ["classify"],
                 },
             ]
@@ -137,10 +144,73 @@ def test_unknown_step_output_field_reported():
 
 def test_reference_to_unknown_step_reported():
     p = Pipeline.model_validate(
-        {"steps": [{"id": "a", "type": "task", "prompt": "Use <ghost.output>"}]}
+        {"steps": [{"id": "a", "type": "task", "prompt": "Use {{ghost.output}}"}]}
     )
     errors = validate_typed_io(p)
     assert any("ghost" in e for e in errors)
+
+
+# --- New hardening tests ---
+
+
+def test_typed_io_accepts_brace_input_ref():
+    p = _pipe(
+        [{"id": "a", "type": "task", "prompt": "do {{task}}"}],
+        inputs={"task": "string"},
+    )
+    assert validate_typed_io(p) == []
+
+
+def test_typed_io_rejects_unknown_input_ref():
+    p = _pipe([{"id": "a", "type": "task", "prompt": "do {{nope}}"}], inputs={"task": "string"})
+    errs = validate_typed_io(p)
+    assert any("nope" in e for e in errs)
+
+
+def test_typed_io_prose_angle_brackets_ignored():
+    p = _pipe([{"id": "a", "type": "task", "prompt": "use List<T> generics"}])
+    assert validate_typed_io(p) == []
+
+
+def test_typed_io_step_output_ref_must_be_ancestor():
+    # 'b' references 'a.output' but does NOT depend on 'a' -> error.
+    p = _pipe([
+        {"id": "a", "type": "task", "prompt": "x", "output_schema": {"k": "string"}},
+        {"id": "b", "type": "task", "prompt": "use {{a.output}}"},
+    ])
+    errs = validate_typed_io(p)
+    assert any("a.output" in e and "ancestor" in e.lower() for e in errs)
+
+
+def test_typed_io_step_output_ref_ok_when_ancestor():
+    p = _pipe([
+        {"id": "a", "type": "task", "prompt": "x"},
+        {"id": "b", "type": "task", "prompt": "use {{a.output}}", "needs": ["a"]},
+    ])
+    assert validate_typed_io(p) == []
+
+
+def test_typed_io_rejects_deep_field_ref():
+    p = _pipe([
+        {"id": "a", "type": "task", "prompt": "x", "output_schema": {"k": "string"}},
+        {"id": "b", "type": "task", "prompt": "{{a.output.k.deep}}", "needs": ["a"]},
+    ])
+    errs = validate_typed_io(p)
+    assert any("a.output.k.deep" in e for e in errs)
+
+
+def test_dag_reports_both_dangling_and_cycle():
+    # a needs [b, ghost]; b needs [a] -> BOTH a dangling-need error AND a cycle error.
+    p = _pipe([
+        {"id": "a", "type": "task", "prompt": "x", "needs": ["b", "ghost"]},
+        {"id": "b", "type": "task", "prompt": "y", "needs": ["a"]},
+    ])
+    errs = validate_dag(p)
+    assert any("ghost" in e for e in errs)
+    assert any("cycle" in e.lower() for e in errs)
+
+
+# --- validate_file_scope tests ---
 
 
 def test_no_overlap_no_warnings():
