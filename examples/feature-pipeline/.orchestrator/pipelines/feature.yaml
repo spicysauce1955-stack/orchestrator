@@ -1,0 +1,36 @@
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: classify
+    type: task
+    prompt: "Classify <task> as: bugfix | feature | refactor"
+    output_schema: { kind: "enum[bugfix,feature,refactor]" }
+  - id: plan
+    role: planner
+    needs: [classify]
+  - id: implement
+    role: implementer
+    needs: [plan]
+    file_scope: ["src/**"]
+    isolation: worktree
+    success_criteria: "pytest -q"
+    max_retries: 2
+  - id: review
+    role: reviewer
+    needs: [implement]
+    on_reject: implement
+  - id: test
+    role: implementer
+    needs: [review]
+    success_criteria: "pytest -q && ruff check"
+  - id: audit
+    role: auditor
+    needs: [test]
+  - id: approve
+    type: gate
+    needs: [audit]
+    require_approval: true
+  - id: merge
+    type: task
+    needs: [approve]
+    merge_strategy: sequential-rebase

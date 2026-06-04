@@ -1,0 +1,5 @@
+harness: claude-code
+permissions: read-only
+access:
+  knowledge: { read: ["repo-conventions"], write: ["lessons"] }
+knowledge: [repo-conventions]

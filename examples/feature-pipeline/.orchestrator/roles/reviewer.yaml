@@ -1,0 +1,3 @@
+harness: claude-code
+permissions: read-only
+knowledge: [repo-conventions]

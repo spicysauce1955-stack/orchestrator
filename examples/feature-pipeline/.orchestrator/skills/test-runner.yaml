@@ -1,0 +1,2 @@
+instructions: "Run `pytest -q` after each change; never delete or weaken tests."
+tools: ["Bash(pytest)", "Read", "Edit"]
