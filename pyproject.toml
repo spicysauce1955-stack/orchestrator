@@ -1,0 +1,42 @@
+[project]
+name = "orchestrator"
+version = "0.1.0"
+description = "Declarative multi-vendor coding-agent orchestrator"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "langgraph>=1.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[project.scripts]
+orch = "orchestrator.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["orchestrator"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# UP042: the (str, Enum) pattern is deliberate — it serializes cleanly to YAML
+# string values and is fully supported by Pydantic v2.
+ignore = ["UP042"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer requires Option/Argument calls in parameter defaults (not a real B008 bug).
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
