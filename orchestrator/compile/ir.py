@@ -30,6 +30,9 @@ def build_ir(pipeline: Pipeline) -> GraphIR:
     # (forward successors + the reject back-edge) are conditional.
     reject_sources = {s.id for s in steps if s.on_reject}
 
+    # Order matters: emit forward (`needs`) edges BEFORE `on_reject` back-edges.
+    # The compiler's forward-only router (wire_edges) picks targets[0], so the
+    # forward successor must come first to keep the M3 graph acyclic.
     raw: list[Edge] = []
     for s in steps:
         for dep in s.needs:

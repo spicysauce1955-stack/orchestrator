@@ -67,6 +67,10 @@ def wire_edges(builder, ir: GraphIR, *, router=None) -> None:
             if router is not None:
                 route_fn = router(source, targets)
             else:
+                # Forward-only default: pick the first target. This relies on
+                # `build_ir` emitting forward (`needs`) edges BEFORE `on_reject`
+                # back-edges, so targets[0] is the forward successor and the graph
+                # stays acyclic in M3. M4 passes a verdict-aware router instead.
                 def route_fn(state, _targets=targets):
                     return _targets[0]
             builder.add_conditional_edges(source, route_fn, targets)
