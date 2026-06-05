@@ -58,6 +58,19 @@ def test_script_dir_falls_back_to_default(tmp_path):
     assert '"kind"' not in last  # default.ndjson is plain text
 
 
+def test_fake_delete_removes_file(tmp_path, monkeypatch):
+    import os
+
+    victim = tmp_path / "doomed.txt"
+    victim.write_text("x")
+    env = {**os.environ, "ORCH_FAKE_SCRIPT": str(PLAN), "ORCH_FAKE_DELETE": str(victim)}
+    subprocess.run(
+        [sys.executable, str(FAKE), "-p", "hi", "--output-format", "stream-json"],
+        env=env, capture_output=True, text=True,
+    )
+    assert not victim.exists()
+
+
 def test_calls_log_appends_per_invocation(tmp_path):
     calls = tmp_path / "calls.log"
     env = {**os.environ, "ORCH_FAKE_SCRIPT": str(PLAN), "ORCH_FAKE_CALLS": str(calls)}

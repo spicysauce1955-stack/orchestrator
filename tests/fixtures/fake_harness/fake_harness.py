@@ -44,6 +44,12 @@ def main() -> int:
     if touch:
         Path(touch).write_text("created by fake harness\n")
 
+    delete = os.environ.get("ORCH_FAKE_DELETE")
+    if delete:
+        p = Path(delete)
+        if p.exists():
+            p.unlink()
+
     # Script selection: explicit file wins; else route within a dir by prompt keyword.
     script_env = os.environ.get("ORCH_FAKE_SCRIPT")
     script_dir = os.environ.get("ORCH_FAKE_SCRIPT_DIR")

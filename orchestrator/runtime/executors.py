@@ -7,7 +7,7 @@ from pathlib import Path
 
 from orchestrator.config.loader import Workspace
 from orchestrator.config.schemas import Pipeline, Step
-from orchestrator.eval.criteria import run_success_criteria
+from orchestrator.eval.criteria import count_tests, run_success_criteria, test_count_regressed
 from orchestrator.eval.verdict import parse_output
 from orchestrator.harness.adapter import HarnessAdapter
 from orchestrator.harness.events import Cost, Done, FileEdit, MessageChunk, ToolCall
@@ -131,6 +131,7 @@ async def run_agent_step(
     is_error = False
 
     worktree = create_worktree(Path(repo), branch=branch)
+    baseline_tests = count_tests(worktree.path)
     try:
         with tracer.start_as_current_span(SPAN_STEP) as step_span:
             step_span.set_attribute("step.id", step.id)
@@ -169,6 +170,18 @@ async def run_agent_step(
                 feedback = crit_out
 
             diff = _capture_diff(worktree.path)
+            # Test-count gate (spec §6): can't go green by deleting tests.
+            if step.success_criteria:
+                after_tests = count_tests(worktree.path)
+                if test_count_regressed(baseline_tests, after_tests):
+                    is_error = True
+                    output = (
+                        f"{output}\n[test-count gate: tests dropped "
+                        f"{baseline_tests}->{after_tests}]"
+                    )
+                step_span.set_attribute("test_count.before", baseline_tests)
+                step_span.set_attribute("test_count.after", after_tests)
+
             output_data, parse_error = parse_output(agg.result_text, step.output_schema)
             if parse_error:
                 is_error = True

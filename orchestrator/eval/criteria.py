@@ -20,9 +20,11 @@ def run_success_criteria(criteria: str, cwd: Path) -> tuple[bool, str]:
 def count_tests(root: Path) -> int:
     """Count pytest-style test functions under `root` (heuristic, MVP)."""
     root = Path(root)
+    root_parts = len(root.parts)
     total = 0
     for path in root.rglob("*.py"):
-        if any(part in _SKIP_DIRS for part in path.parts):
+        # Only inspect parts that are relative to root (skip ancestor dirs).
+        if any(part in _SKIP_DIRS for part in path.parts[root_parts:]):
             continue
         name = path.name
         if not (name.startswith("test_") or name.endswith("_test.py")):
