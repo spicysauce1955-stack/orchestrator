@@ -7,6 +7,7 @@ no-conflict case). A failed `git apply --3way` is a rebase conflict → HITL.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -78,3 +79,30 @@ def apply_diffs(repo: Path, branch: str, diffs: list[str], *, base: str) -> str:
     # Keep the branch; remove the worktree (the branch is what the PR pushes).
     _git(repo, "worktree", "remove", "--force", str(wt))
     return branch
+
+
+def _gh_binary() -> list[str]:
+    env = os.environ.get("ORCH_GH_BIN")
+    return env.split() if env else ["gh"]
+
+
+def open_pull_request(repo: Path, branch: str, *, base: str, title: str) -> str:
+    """Push the integration branch to origin and open a PR. Returns the PR URL.
+
+    Uses `gh` (overridable via $ORCH_GH_BIN for tests). If there is no `origin`
+    remote, returns a local pseudo-ref (MVP: no remote configured).
+    """
+    has_origin = _git(repo, "remote", "get-url", "origin").returncode == 0
+    if not has_origin:
+        return f"local:{branch}"
+    push = _git(repo, "push", "-q", "origin", branch)
+    if push.returncode != 0:
+        raise MergeConflict(f"git push failed: {push.stderr.strip()}")
+    proc = subprocess.run(
+        [*_gh_binary(), "pr", "create", "--base", base, "--head", branch,
+         "--title", title, "--body", "Opened by orchestrator."],
+        cwd=repo, capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise MergeConflict(f"gh pr create failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()

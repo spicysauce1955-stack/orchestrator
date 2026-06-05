@@ -21,7 +21,12 @@ from orchestrator.config.schemas import Pipeline, Step, StepType
 from orchestrator.eval.verdict import Verdict
 from orchestrator.harness.adapter import HarnessAdapter
 from orchestrator.observability.spans import SPAN_RUN, get_tracer
-from orchestrator.runtime.executors import run_agent_step, run_gate_step, run_task_step
+from orchestrator.runtime.executors import (
+    run_agent_step,
+    run_gate_step,
+    run_merge_step,
+    run_task_step,
+)
 from orchestrator.runtime.state import CHECKPOINT_SERDE_MODULES, GraphState, RunContext, RunStatus
 
 _SERDE = JsonPlusSerializer(allowed_msgpack_modules=CHECKPOINT_SERDE_MODULES)
@@ -52,9 +57,14 @@ class DeterministicScheduler:
         async def node(state: GraphState) -> dict:
             ctx = state["ctx"]
             if step.type == StepType.task:
-                await run_task_step(
-                    self.workspace, pipeline, step, ctx, repo=self.repo, adapter=self.adapter
-                )
+                if step.merge_strategy is not None:
+                    await run_merge_step(
+                        self.workspace, pipeline, step, ctx, repo=self.repo, adapter=self.adapter
+                    )
+                else:
+                    await run_task_step(
+                        self.workspace, pipeline, step, ctx, repo=self.repo, adapter=self.adapter
+                    )
             elif step.type == StepType.agent:
                 await run_agent_step(
                     self.workspace, pipeline, step, ctx, repo=self.repo, adapter=self.adapter

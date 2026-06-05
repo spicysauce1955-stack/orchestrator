@@ -13,7 +13,7 @@ from pathlib import Path
 from langgraph.types import interrupt
 
 from orchestrator.config.loader import Workspace
-from orchestrator.config.schemas import Pipeline, Step
+from orchestrator.config.schemas import Pipeline, Step, StepType
 from orchestrator.eval.criteria import count_tests, run_success_criteria, test_count_regressed
 from orchestrator.eval.verdict import parse_output
 from orchestrator.harness.adapter import HarnessAdapter
@@ -26,6 +26,7 @@ from orchestrator.observability.spans import (
     SPAN_TOOL_CALL,
     get_tracer,
 )
+from orchestrator.runtime.merge import MergeConflict, apply_diffs, base_branch, open_pull_request
 from orchestrator.runtime.state import Artifact, RunContext
 from orchestrator.runtime.template import render_template
 from orchestrator.safety.capabilities import ResolvedCaps, resolve_capabilities
@@ -223,7 +224,10 @@ async def run_task_step(
 ) -> Artifact:
     """Run a `task` step (cheap LLM glue): read-only, no worktree, parse output."""
     if step.merge_strategy is not None:
-        raise NotImplementedError(f"merge task step '{step.id}' runs in M5")
+        raise NotImplementedError(
+            f"merge task step '{step.id}' must be dispatched via the scheduler's"
+            " run_merge_step (direct run_task_step callers are not supported for merge steps)"
+        )
 
     caps = ResolvedCaps.read_only()
     tracer = get_tracer()
@@ -272,3 +276,92 @@ def run_gate_step(step: Step, ctx: RunContext) -> str:
     decision = "reject" if str(decision).lower() == "reject" else "approve"
     ctx.gate_decisions[step.id] = decision
     return decision
+
+
+def _terminal_verdict(ctx: RunContext) -> str | None:
+    """The last recorded review verdict, if any step produced one."""
+    verdict = None
+    for art in ctx.artifacts.values():
+        if art.output_data and "verdict" in art.output_data:
+            verdict = art.output_data["verdict"]
+    return verdict
+
+
+async def run_merge_step(
+    workspace,
+    pipeline: Pipeline,
+    step: Step,
+    ctx: RunContext,
+    *,
+    repo: Path,
+    adapter,
+) -> Artifact:
+    """Merge upstream agent diffs onto base → open PR. Conflict → HITL conflict gate."""
+    tracer = get_tracer()
+    with tracer.start_as_current_span(SPAN_STEP) as span:
+        span.set_attribute("step.id", step.id)
+        span.set_attribute("step.type", "merge")
+
+        verdict = _terminal_verdict(ctx)
+        if verdict is not None and verdict != "approve":
+            span.set_attribute("merge.blocked_verdict", verdict)
+            art = Artifact(
+                step_id=step.id,
+                output=f"merge refused: review verdict is '{verdict}', not approve",
+                diff="",
+                branch="",
+                cost_usd=0.0,
+                tokens=0,
+                is_error=True,
+            )
+            ctx.record(art)
+            return art
+
+        diffs = [
+            a.diff
+            for s in pipeline.steps
+            if s.type == StepType.agent and (a := ctx.artifacts.get(s.id)) and a.diff.strip()
+        ]
+        base = base_branch(Path(repo))
+        branch = f"orch/{ctx.run_id}/merge"
+        try:
+            apply_diffs(Path(repo), branch, diffs, base=base)
+        except MergeConflict as conflict:
+            decision = interrupt({
+                "step_id": step.id,
+                "kind": "conflict",
+                "run_id": ctx.run_id,
+                "prompt": (
+                    "Merge conflict. Resolve base and reply approve to retry, reject to abort."
+                ),
+                "detail": str(conflict),
+            })
+            if str(decision).lower() == "reject":
+                art = Artifact(
+                    step_id=step.id,
+                    output=f"merge aborted on conflict: {conflict}",
+                    diff="",
+                    branch="",
+                    cost_usd=0.0,
+                    tokens=0,
+                    is_error=True,
+                )
+                ctx.record(art)
+                return art
+            apply_diffs(Path(repo), branch, diffs, base=base)
+
+        pr = open_pull_request(Path(repo), branch, base=base, title=f"orchestrator: {ctx.run_id}")
+        span.set_attribute("merge.branch", branch)
+        span.set_attribute("merge.pr_url", pr)
+        art = Artifact(
+            step_id=step.id,
+            output=f"opened PR for {branch} -> {base}: {pr}",
+            diff="",
+            branch=branch,
+            cost_usd=0.0,
+            tokens=0,
+            is_error=False,
+            output_data={"pr_url": pr, "branch": branch, "base": base},
+        )
+        ctx.record(art)
+        return art
