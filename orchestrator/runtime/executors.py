@@ -330,6 +330,14 @@ async def run_merge_step(
         # Drop byte-identical diffs — idempotent re-apply is not a conflict.
         diffs = list(dict.fromkeys(diffs))
         base = base_branch(Path(repo))
+        if not diffs:
+            art = Artifact(
+                step_id=step.id, output="nothing to merge: no agent changes to integrate",
+                diff="", branch="", cost_usd=0.0, tokens=0, is_error=False,
+                output_data={"pr_url": None, "branch": None, "base": base},
+            )
+            ctx.record(art)
+            return art
         branch = f"orch/{ctx.run_id}/merge"
         try:
             apply_diffs(Path(repo), branch, diffs, base=base)
@@ -355,7 +363,19 @@ async def run_merge_step(
                 )
                 ctx.record(art)
                 return art
-            apply_diffs(Path(repo), branch, diffs, base=base)
+            # approve → retry once (base presumably resolved by the human).
+            try:
+                apply_diffs(Path(repo), branch, diffs, base=base)
+            except MergeConflict as retry_conflict:
+                art = Artifact(
+                    step_id=step.id,
+                    output=(
+                        f"merge still conflicts after resume; base not resolved: {retry_conflict}"
+                    ),
+                    diff="", branch="", cost_usd=0.0, tokens=0, is_error=True,
+                )
+                ctx.record(art)
+                return art
 
         pr = open_pull_request(Path(repo), branch, base=base, title=f"orchestrator: {ctx.run_id}")
         span.set_attribute("merge.branch", branch)
