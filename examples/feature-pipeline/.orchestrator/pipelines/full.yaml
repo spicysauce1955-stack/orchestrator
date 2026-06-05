@@ -1,0 +1,42 @@
+# M5 demo: the full spec shape — classify -> plan -> implement -> review (reject->implement)
+# -> test -> audit -> approve (HITL gate) -> merge (PR). Run pauses at `approve`; resume to merge.
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: classify
+    type: task
+    prompt: 'Classify {{task}} as exactly one of: bugfix | feature | refactor. Reply with JSON {"kind": "<one>"}.'
+    output_schema: { kind: "enum[bugfix,feature,refactor]" }
+  - id: plan
+    role: planner
+    needs: [classify]
+    prompt: "Task: {{task}}\nKind: {{classify.output.kind}}\nWrite a short implementation plan."
+  - id: implement
+    role: implementer
+    needs: [plan]
+    prompt: "Implement this plan:\n{{plan.output}}"
+    success_criteria: "true"
+    max_retries: 2
+  - id: review
+    role: reviewer
+    needs: [implement]
+    prompt: 'Review this implementation:\n{{implement.output}}\nReply with JSON {"verdict": "approve|reject"}.'
+    output_schema: { verdict: "enum[approve,reject]" }
+    on_reject: implement
+  - id: test
+    role: implementer
+    needs: [review]
+    prompt: "Run the checks for {{task}}"
+    success_criteria: "true"
+  - id: audit
+    role: auditor
+    needs: [test]
+    prompt: "Audit the change for {{task}} and summarize."
+  - id: approve
+    type: gate
+    needs: [audit]
+    require_approval: true
+  - id: merge
+    type: task
+    needs: [approve]
+    merge_strategy: sequential-rebase

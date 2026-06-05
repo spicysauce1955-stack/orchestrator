@@ -49,8 +49,9 @@ class DeterministicScheduler:
             if checkpoint_db is not None
             else self.repo / ".orch" / "checkpoints.sqlite"
         )
-        # Cache pipelines registered via run() so resume() can look them up even when
-        # the pipeline was constructed dynamically and is not part of the workspace.
+        # Same-process convenience: caches dynamically-constructed pipelines so that
+        # resume() can find them within the same process. Cross-process resume requires
+        # the pipeline to be defined in the workspace (workspace.pipelines[pipeline_name]).
         self._pipeline_cache: dict[str, Pipeline] = {}
 
     def _make_node(self, pipeline: Pipeline, step: Step):

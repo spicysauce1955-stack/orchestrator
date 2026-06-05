@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from pathlib import Path
 
@@ -10,15 +11,20 @@ import typer
 
 from orchestrator.compile.compiler import compile_pipeline
 from orchestrator.config.loader import ConfigError, load_workspace
-from orchestrator.config.schemas import StepType
+from orchestrator.config.schemas import Mode, StepType
 from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
 from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tracer
 from orchestrator.runtime.controller import make_controller
 from orchestrator.runtime.executors import run_agent_step
-from orchestrator.runtime.state import RunContext
+from orchestrator.runtime.state import RunContext, RunStatus
 from orchestrator.runtime.template import TemplateError
 
 app = typer.Typer(help="Declarative multi-vendor coding-agent orchestrator.")
+
+
+def _checkpoint_db(repo: Path) -> Path:
+    env = os.environ.get("ORCH_CHECKPOINT_DB")
+    return Path(env) if env else Path(repo) / ".orch" / "checkpoints.sqlite"
 
 
 def _print_artifact(artifact, run_id, *, brief: bool = False) -> None:
@@ -140,7 +146,9 @@ def run(
 
     # Full-pipeline mode (M3).
     try:
-        controller = make_controller(pipe.mode, workspace, adapter, repo)
+        controller = make_controller(
+            pipe.mode, workspace, adapter, repo, checkpoint_db=_checkpoint_db(repo)
+        )
     except NotImplementedError as exc:
         typer.echo(f"error: {exc}")
         raise typer.Exit(2) from exc
@@ -150,6 +158,13 @@ def run(
     except TemplateError as exc:
         typer.echo(f"error: template reference failed during run: {exc}")
         raise typer.Exit(1) from exc
+
+    if ctx.status == RunStatus.PAUSED:
+        p = ctx.pending_interrupt or {}
+        typer.echo(f"run {run_id}: PAUSED at gate '{p.get('step_id')}'")
+        typer.echo(f"  {p.get('prompt', 'approval required')}")
+        typer.echo(f"  resume with: orch resume {run_id} --approve   (or --reject)")
+        return
 
     typer.echo(f"run {run_id}: pipeline '{pipeline}' ({len(ctx.artifacts)} steps)")
     any_error = False
@@ -171,9 +186,44 @@ def status(run_id: str = typer.Argument(...)) -> None:
 
 
 @app.command()
-def resume(run_id: str = typer.Argument(...)) -> None:
-    """Resume an interrupted run (later milestone)."""
-    _not_implemented("resume")
+def resume(
+    run_id: str = typer.Argument(...),
+    approve: bool = typer.Option(False, "--approve", help="Approve the pending gate."),
+    reject: bool = typer.Option(False, "--reject", help="Reject the pending gate."),
+    root: Path = typer.Option(Path(".orchestrator"), "--root"),
+    repo: Path = typer.Option(Path("."), "--repo"),
+) -> None:
+    """Resume a run paused at a HITL gate."""
+    if approve == reject:
+        typer.echo("error: pass exactly one of --approve / --reject.")
+        raise typer.Exit(2)
+    decision = "approve" if approve else "reject"
+    try:
+        workspace = load_workspace(root)
+    except ConfigError as exc:
+        typer.echo(f"config error: {exc}")
+        raise typer.Exit(1) from exc
+    configure_tracing(exporter=None)
+    adapter = ClaudeCodeCLIAdapter()
+    controller = make_controller(
+        Mode.declarative, workspace, adapter, repo, checkpoint_db=_checkpoint_db(repo)
+    )
+    try:
+        ctx = asyncio.run(controller.resume(run_id, decision))
+    except KeyError as exc:
+        typer.echo(f"error: no paused run '{run_id}' found.")
+        raise typer.Exit(1) from exc
+    if ctx.status == RunStatus.PAUSED:
+        p = ctx.pending_interrupt or {}
+        typer.echo(f"run {run_id}: PAUSED again at '{p.get('step_id')}' — {p.get('prompt','')}")
+        typer.echo(f"  resume with: orch resume {run_id} --approve  (or --reject)")
+        return
+    typer.echo(f"run {run_id}: {ctx.status.value} ({len(ctx.artifacts)} steps)")
+    for art in ctx.artifacts.values():
+        _print_artifact(art, run_id, brief=True)
+    typer.echo(f"total cost: ${ctx.total_cost_usd:.4f}")
+    if any(a.is_error for a in ctx.artifacts.values()):
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover
