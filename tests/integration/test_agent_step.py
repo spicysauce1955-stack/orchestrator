@@ -74,7 +74,7 @@ async def test_agent_step_captures_diff_when_harness_edits(tmp_path, monkeypatch
     )
 
     assert "note.txt" in artifact.diff
-    assert artifact.branch.endswith("implement")
+    assert "/implement/" in artifact.branch  # branch now carries an attempt suffix
 
 
 async def test_success_criteria_retries_then_passes(tmp_path, monkeypatch):
@@ -147,3 +147,54 @@ async def test_bad_template_ref_raises_template_error(tmp_path, monkeypatch):
         await run_agent_step(
             ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter
         )
+
+
+async def test_agent_step_parses_verdict_from_result(tmp_path, monkeypatch):
+    import sys
+
+    from orchestrator.config.schemas import Step
+    from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
+    from orchestrator.runtime.executors import run_agent_step
+    from orchestrator.runtime.state import RunContext
+
+    # A canned script whose RESULT is the verdict JSON, with chat text too.
+    script = tmp_path / "verdict.ndjson"
+    script.write_text(
+        '{"type":"system","subtype":"init","session_id":"v1","tools":[],"cwd":"."}\n'
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"Reviewing."}]}}\n'
+        '{"type":"result","subtype":"success","is_error":false,'
+        '"result":"{\\"verdict\\": \\"reject\\"}","total_cost_usd":0.005,'
+        '"usage":{"input_tokens":10,"output_tokens":5},"session_id":"v1"}\n'
+    )
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(script))
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    step = Step.model_validate({
+        "id": "review", "role": "reviewer", "prompt": "Review {{task}}",
+        "output_schema": {"verdict": "enum[approve,reject]"},
+    })
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    ctx = RunContext(run_id="rv", inputs={"task": "t"})
+
+    art = await run_agent_step(ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter)
+
+    assert art.output_data == {"verdict": "reject"}
+    assert art.output == "Reviewing."          # chat text, not the result JSON
+    assert art.is_error is False
+
+
+async def test_repeated_agent_step_uses_distinct_branches(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "default.ndjson"))
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    step = Step.model_validate({"id": "implement", "role": "implementer", "prompt": "do the work"})
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    ctx = RunContext(run_id="reentry", inputs={"task": "t"})
+
+    a1 = await run_agent_step(ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter)
+    a2 = await run_agent_step(ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter)
+
+    assert a1.branch != a2.branch
+    assert a1.branch.endswith("/1")
+    assert a2.branch.endswith("/2")
+    assert ctx.attempts["implement"] == 2

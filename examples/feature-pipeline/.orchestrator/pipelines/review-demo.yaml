@@ -1,0 +1,29 @@
+# M4 demo: classify (task) -> plan -> implement -> review (reject->implement) -> test.
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: classify
+    type: task
+    prompt: 'Classify {{task}} as exactly one of: bugfix | feature | refactor. Reply with JSON {"kind": "<one>"}.'
+    output_schema: { kind: "enum[bugfix,feature,refactor]" }
+  - id: plan
+    role: planner
+    needs: [classify]
+    prompt: "Task: {{task}}\nKind: {{classify.output.kind}}\nWrite a short implementation plan."
+  - id: implement
+    role: implementer
+    needs: [plan]
+    prompt: "Implement this plan:\n{{plan.output}}"
+    success_criteria: "true"
+    max_retries: 2
+  - id: review
+    role: reviewer
+    needs: [implement]
+    prompt: 'Please review this implementation:\n{{implement.output}}\nReply with JSON {"verdict": "approve|reject"}.'
+    output_schema: { verdict: "enum[approve,reject]" }
+    on_reject: implement
+  - id: test
+    role: implementer
+    needs: [review]
+    prompt: "Run the checks for {{task}}"
+    success_criteria: "true"

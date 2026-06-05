@@ -24,6 +24,7 @@ class RunContext:
     inputs: dict[str, str] = field(default_factory=dict)
     artifacts: dict[str, Artifact] = field(default_factory=dict)
     total_cost_usd: float = 0.0
+    attempts: dict[str, int] = field(default_factory=dict)
 
     def record(self, artifact: Artifact) -> None:
         self.artifacts[artifact.step_id] = artifact
