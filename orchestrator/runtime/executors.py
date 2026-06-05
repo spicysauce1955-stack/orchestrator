@@ -169,6 +169,9 @@ async def run_agent_step(
                 feedback = crit_out
 
             diff = _capture_diff(worktree.path)
+            output_data, parse_error = parse_output(agg.result_text, step.output_schema)
+            if parse_error:
+                is_error = True
             step_span.set_attribute("step.is_error", is_error)
 
         artifact = Artifact(
@@ -179,6 +182,7 @@ async def run_agent_step(
             cost_usd=total_cost,
             tokens=total_tokens,
             is_error=is_error,
+            output_data=output_data,
         )
         ctx.record(artifact)
         return artifact
