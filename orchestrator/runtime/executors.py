@@ -43,20 +43,22 @@ def _render_prompt(step: Step, role_name: str | None, ctx: RunContext) -> str:
 
 
 def _capture_diff(cwd: Path) -> str:
-    """Diff of tracked changes + names of untracked files in the worktree."""
-    tracked = subprocess.run(
+    """Diff of all changes in the worktree, including newly created files.
+
+    `git add -A -N` (intent-to-add) registers untracked files so `git diff` emits a
+    full patch (with content) for them — required so a captured diff can be
+    re-applied by the merge step. `git reset HEAD` is called afterwards to remove
+    the intent-to-add entries from the index, leaving the working tree and index
+    otherwise untouched.
+    """
+    subprocess.run(
+        ["git", "add", "-A", "-N"], cwd=cwd, capture_output=True, text=True
+    )
+    diff = subprocess.run(
         ["git", "diff"], cwd=cwd, capture_output=True, text=True
     ).stdout
-    untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    ).stdout
-    if untracked.strip():
-        names = "\n".join(f"+++ untracked: {n}" for n in untracked.splitlines())
-        tracked = f"{tracked}\n{names}" if tracked else names
-    return tracked
+    subprocess.run(["git", "reset", "HEAD"], cwd=cwd, capture_output=True, text=True)
+    return diff
 
 
 class _Aggregate:
