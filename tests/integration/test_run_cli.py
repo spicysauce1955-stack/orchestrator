@@ -65,6 +65,27 @@ def test_run_full_pipeline(tmp_path, monkeypatch):
     assert "feature" in result.output  # classify output_data surfaced
 
 
+def test_run_review_demo_loops_then_completes(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path / "repo")
+    dest = repo / ".orchestrator"
+    shutil.copytree(EXAMPLE, dest)
+
+    monkeypatch.setenv("ORCH_CLAUDE_BIN", f"{sys.executable} {FAKE}")
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT_DIR", str(SCRIPTS))
+    monkeypatch.setenv("ORCH_FAKE_STATE", str(tmp_path / "state.json"))
+
+    result = runner.invoke(
+        app,
+        ["run", "review-demo", "--task", "add a widget",
+         "--root", str(dest), "--repo", str(repo)],
+    )
+    assert result.exit_code == 0, result.output
+    # review approved on the 2nd pass; verdict surfaced; test ran.
+    assert "review" in result.output
+    assert "approve" in result.output
+    assert "test" in result.output
+
+
 def test_run_only_step_with_dataflow_ref_errors_cleanly(tmp_path, monkeypatch):
     # `implement` references {{plan.output}}; run in isolation it cannot resolve.
     # The CLI must report a clean error + hint, not dump a TemplateError traceback.
