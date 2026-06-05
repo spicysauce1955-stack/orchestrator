@@ -6,9 +6,13 @@ closures and invokes it. A single shared RunContext is threaded through nodes.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, StateGraph
+from langgraph.types import Command  # noqa: F401
 
 from orchestrator.compile.compiler import wire_edges
 from orchestrator.compile.ir import build_ir
@@ -18,14 +22,28 @@ from orchestrator.eval.verdict import Verdict
 from orchestrator.harness.adapter import HarnessAdapter
 from orchestrator.observability.spans import SPAN_RUN, get_tracer
 from orchestrator.runtime.executors import run_agent_step, run_task_step
-from orchestrator.runtime.state import GraphState, RunContext
+from orchestrator.runtime.state import CHECKPOINT_SERDE_MODULES, GraphState, RunContext, RunStatus
+
+_SERDE = JsonPlusSerializer(allowed_msgpack_modules=CHECKPOINT_SERDE_MODULES)
 
 
 class DeterministicScheduler:
-    def __init__(self, workspace: Workspace, adapter: HarnessAdapter, repo: Path) -> None:
+    def __init__(
+        self,
+        workspace: Workspace,
+        adapter: HarnessAdapter,
+        repo: Path,
+        *,
+        checkpoint_db: Path | None = None,
+    ) -> None:
         self.workspace = workspace
         self.adapter = adapter
         self.repo = Path(repo)
+        self.checkpoint_db = (
+            Path(checkpoint_db)
+            if checkpoint_db is not None
+            else self.repo / ".orch" / "checkpoints.sqlite"
+        )
 
     def _make_node(self, pipeline: Pipeline, step: Step):
         async def node(state: GraphState) -> dict:
@@ -67,23 +85,42 @@ class DeterministicScheduler:
 
         return router
 
-    def _build(self, pipeline: Pipeline):
+    @asynccontextmanager
+    async def _saver(self):
+        self.checkpoint_db.parent.mkdir(parents=True, exist_ok=True)
+        async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_db)) as saver:
+            saver.serde = _SERDE
+            yield saver
+
+    def _build(self, pipeline: Pipeline, saver):
         ir = build_ir(pipeline)
         by_id = {s.id: s for s in pipeline.steps}
         builder = StateGraph(GraphState)
         for node_id in ir.nodes:
             builder.add_node(node_id, self._make_node(pipeline, by_id[node_id]))
         wire_edges(builder, ir, router=self._verdict_router(pipeline))
-        return builder.compile()
+        return builder.compile(checkpointer=saver)
+
+    def _finalize(self, result: dict) -> RunContext:
+        ctx = result["ctx"]
+        interrupts = result.get("__interrupt__")
+        if interrupts:
+            ctx.status = RunStatus.PAUSED
+            ctx.pending_interrupt = dict(interrupts[0].value)
+        elif ctx.status == RunStatus.RUNNING:
+            ctx.status = RunStatus.COMPLETED
+        return ctx
 
     async def run(
         self, pipeline: Pipeline, inputs: dict[str, str], run_id: str
     ) -> RunContext:
-        ctx = RunContext(run_id=run_id, inputs=dict(inputs))
-        graph = self._build(pipeline)
+        ctx = RunContext(run_id=run_id, inputs=dict(inputs), pipeline_name=pipeline.name)
+        config = {"configurable": {"thread_id": run_id}, "recursion_limit": 100}
         tracer = get_tracer()
-        with tracer.start_as_current_span(SPAN_RUN) as run_span:
-            run_span.set_attribute("run.id", run_id)
-            run_span.set_attribute("pipeline", pipeline.name)
-            await graph.ainvoke({"ctx": ctx}, {"recursion_limit": 100})
-        return ctx
+        async with self._saver() as saver:
+            graph = self._build(pipeline, saver)
+            with tracer.start_as_current_span(SPAN_RUN) as run_span:
+                run_span.set_attribute("run.id", run_id)
+                run_span.set_attribute("pipeline", pipeline.name)
+                result = await graph.ainvoke({"ctx": ctx}, config)
+        return self._finalize(result)
