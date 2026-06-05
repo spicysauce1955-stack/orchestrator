@@ -74,7 +74,7 @@ async def test_agent_step_captures_diff_when_harness_edits(tmp_path, monkeypatch
     )
 
     assert "note.txt" in artifact.diff
-    assert artifact.branch.endswith("implement")
+    assert "/implement/" in artifact.branch  # branch now carries an attempt suffix
 
 
 async def test_success_criteria_retries_then_passes(tmp_path, monkeypatch):
@@ -147,3 +147,20 @@ async def test_bad_template_ref_raises_template_error(tmp_path, monkeypatch):
         await run_agent_step(
             ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter
         )
+
+
+async def test_repeated_agent_step_uses_distinct_branches(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "default.ndjson"))
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    step = Step.model_validate({"id": "implement", "role": "implementer", "prompt": "do the work"})
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    ctx = RunContext(run_id="reentry", inputs={"task": "t"})
+
+    a1 = await run_agent_step(ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter)
+    a2 = await run_agent_step(ws, ws.pipelines["feature"], step, ctx, repo=repo, adapter=adapter)
+
+    assert a1.branch != a2.branch
+    assert a1.branch.endswith("/1")
+    assert a2.branch.endswith("/2")
+    assert ctx.attempts["implement"] == 2

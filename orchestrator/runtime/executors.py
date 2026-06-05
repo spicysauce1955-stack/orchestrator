@@ -120,7 +120,9 @@ async def run_agent_step(
         raise ValueError(f"step '{step.id}' is not an agent step (no role)")
     role = workspace.roles[step.role]
     caps = resolve_capabilities(role, workspace)
-    branch = f"orch/{ctx.run_id}/{step.id}"
+    attempt_no = ctx.attempts.get(step.id, 0) + 1
+    ctx.attempts[step.id] = attempt_no
+    branch = f"orch/{ctx.run_id}/{step.id}/{attempt_no}"
 
     tracer = get_tracer()
     total_cost = 0.0
