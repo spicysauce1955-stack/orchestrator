@@ -322,6 +322,13 @@ async def run_merge_step(
             for s in pipeline.steps
             if s.type == StepType.agent and (a := ctx.artifacts.get(s.id)) and a.diff.strip()
         ]
+        # Cross-step filesystem isolation means each agent worktree starts fresh off base,
+        # so the fake harness (ORCH_FAKE_TOUCH) emits an identical "create <file>" diff in
+        # every step. Re-applying byte-identical work is a no-op, not a real conflict;
+        # dedup here preserves order while dropping those spurious duplicates. Genuinely
+        # different diffs (real conflicts) are distinct strings and are preserved.
+        # Drop byte-identical diffs — idempotent re-apply is not a conflict.
+        diffs = list(dict.fromkeys(diffs))
         base = base_branch(Path(repo))
         branch = f"orch/{ctx.run_id}/merge"
         try:
