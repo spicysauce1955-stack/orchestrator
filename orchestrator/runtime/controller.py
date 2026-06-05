@@ -11,8 +11,13 @@ from orchestrator.runtime.scheduler import DeterministicScheduler
 
 
 def make_controller(
-    mode: Mode, workspace: Workspace, adapter: HarnessAdapter, repo: Path
+    mode: Mode,
+    workspace: Workspace,
+    adapter: HarnessAdapter,
+    repo: Path,
+    *,
+    checkpoint_db=None,
 ) -> DeterministicScheduler:
     if mode == Mode.agentic:
         raise NotImplementedError("agentic mode (AgenticSupervisor) is specced, not built")
-    return DeterministicScheduler(workspace, adapter, repo)
+    return DeterministicScheduler(workspace, adapter, repo, checkpoint_db=checkpoint_db)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from orchestrator.config.schemas import Pipeline
+from orchestrator.config.schemas import Pipeline, StepType
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,11 @@ def build_ir(pipeline: Pipeline) -> GraphIR:
 
     # A step that declares on_reject is a branch point: ALL of its outgoing edges
     # (forward successors + the reject back-edge) are conditional.
-    reject_sources = {s.id for s in steps if s.on_reject}
+    # Gate steps are also conditional sources: they route to forward OR END based on
+    # the human's approve/reject decision.
+    conditional_sources = {s.id for s in steps if s.on_reject} | {
+        s.id for s in steps if s.type == StepType.gate
+    }
 
     # Order matters: emit forward (`needs`) edges BEFORE `on_reject` back-edges.
     # The compiler's forward-only router (wire_edges) picks targets[0], so the
@@ -42,7 +46,7 @@ def build_ir(pipeline: Pipeline) -> GraphIR:
             raw.append(Edge(s.id, s.on_reject))
 
     edges = [
-        Edge(e.source, e.target, conditional=e.source in reject_sources) for e in raw
+        Edge(e.source, e.target, conditional=e.source in conditional_sources) for e in raw
     ]
 
     needed = {dep for s in steps for dep in s.needs}

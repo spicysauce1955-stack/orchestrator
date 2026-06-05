@@ -10,8 +10,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from langgraph.types import interrupt
+
 from orchestrator.config.loader import Workspace
-from orchestrator.config.schemas import Pipeline, Step
+from orchestrator.config.schemas import Pipeline, Step, StepType
 from orchestrator.eval.criteria import count_tests, run_success_criteria, test_count_regressed
 from orchestrator.eval.verdict import parse_output
 from orchestrator.harness.adapter import HarnessAdapter
@@ -24,6 +26,7 @@ from orchestrator.observability.spans import (
     SPAN_TOOL_CALL,
     get_tracer,
 )
+from orchestrator.runtime.merge import MergeConflict, apply_diffs, base_branch, open_pull_request
 from orchestrator.runtime.state import Artifact, RunContext
 from orchestrator.runtime.template import render_template
 from orchestrator.safety.capabilities import ResolvedCaps, resolve_capabilities
@@ -43,20 +46,22 @@ def _render_prompt(step: Step, role_name: str | None, ctx: RunContext) -> str:
 
 
 def _capture_diff(cwd: Path) -> str:
-    """Diff of tracked changes + names of untracked files in the worktree."""
-    tracked = subprocess.run(
+    """Diff of all changes in the worktree, including newly created files.
+
+    `git add -A -N` (intent-to-add) registers untracked files so `git diff` emits a
+    full patch (with content) for them — required so a captured diff can be
+    re-applied by the merge step. `git reset HEAD` is called afterwards to remove
+    the intent-to-add entries from the index, leaving the working tree and index
+    otherwise untouched.
+    """
+    subprocess.run(
+        ["git", "add", "-A", "-N"], cwd=cwd, capture_output=True, text=True
+    )
+    diff = subprocess.run(
         ["git", "diff"], cwd=cwd, capture_output=True, text=True
     ).stdout
-    untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    ).stdout
-    if untracked.strip():
-        names = "\n".join(f"+++ untracked: {n}" for n in untracked.splitlines())
-        tracked = f"{tracked}\n{names}" if tracked else names
-    return tracked
+    subprocess.run(["git", "reset", "HEAD"], cwd=cwd, capture_output=True, text=True)
+    return diff
 
 
 class _Aggregate:
@@ -219,7 +224,10 @@ async def run_task_step(
 ) -> Artifact:
     """Run a `task` step (cheap LLM glue): read-only, no worktree, parse output."""
     if step.merge_strategy is not None:
-        raise NotImplementedError(f"merge task step '{step.id}' runs in M5")
+        raise NotImplementedError(
+            f"merge task step '{step.id}' must be dispatched via the scheduler's"
+            " run_merge_step (direct run_task_step callers are not supported for merge steps)"
+        )
 
     caps = ResolvedCaps.read_only()
     tracer = get_tracer()
@@ -248,3 +256,139 @@ async def run_task_step(
     )
     ctx.record(artifact)
     return artifact
+
+
+def run_gate_step(step: Step, ctx: RunContext) -> str:
+    """HITL gate: interrupt() halts+checkpoints the run; on resume returns the decision.
+
+    The payload summarizes the run for the human. The returned value
+    ('approve'|'reject') is stored in ctx.gate_decisions for the conditional edge.
+    """
+    last = next(reversed(ctx.artifacts.values()), None) if ctx.artifacts else None
+    payload = {
+        "step_id": step.id,
+        "prompt": f"Approve step '{step.id}'? Reply approve|reject.",
+        "run_id": ctx.run_id,
+        "last_output": (last.output[:500] if last else ""),
+        "total_cost_usd": ctx.total_cost_usd,
+    }
+    decision = interrupt(payload)
+    decision = "reject" if str(decision).lower() == "reject" else "approve"
+    ctx.gate_decisions[step.id] = decision
+    return decision
+
+
+def _terminal_verdict(ctx: RunContext) -> str | None:
+    """The last recorded review verdict, if any step produced one."""
+    verdict = None
+    for art in ctx.artifacts.values():
+        if art.output_data and "verdict" in art.output_data:
+            verdict = art.output_data["verdict"]
+    return verdict
+
+
+async def run_merge_step(
+    workspace,
+    pipeline: Pipeline,
+    step: Step,
+    ctx: RunContext,
+    *,
+    repo: Path,
+    adapter,
+) -> Artifact:
+    """Merge upstream agent diffs onto base → open PR. Conflict → HITL conflict gate."""
+    tracer = get_tracer()
+    with tracer.start_as_current_span(SPAN_STEP) as span:
+        span.set_attribute("step.id", step.id)
+        span.set_attribute("step.type", "merge")
+
+        verdict = _terminal_verdict(ctx)
+        if verdict is not None and verdict != "approve":
+            span.set_attribute("merge.blocked_verdict", verdict)
+            art = Artifact(
+                step_id=step.id,
+                output=f"merge refused: review verdict is '{verdict}', not approve",
+                diff="",
+                branch="",
+                cost_usd=0.0,
+                tokens=0,
+                is_error=True,
+            )
+            ctx.record(art)
+            return art
+
+        diffs = [
+            a.diff
+            for s in pipeline.steps
+            if s.type == StepType.agent and (a := ctx.artifacts.get(s.id)) and a.diff.strip()
+        ]
+        # Cross-step filesystem isolation means each agent worktree starts fresh off base,
+        # so the fake harness (ORCH_FAKE_TOUCH) emits an identical "create <file>" diff in
+        # every step. Re-applying byte-identical work is a no-op, not a real conflict;
+        # dedup here preserves order while dropping those spurious duplicates. Genuinely
+        # different diffs (real conflicts) are distinct strings and are preserved.
+        # Drop byte-identical diffs — idempotent re-apply is not a conflict.
+        diffs = list(dict.fromkeys(diffs))
+        base = base_branch(Path(repo))
+        if not diffs:
+            art = Artifact(
+                step_id=step.id, output="nothing to merge: no agent changes to integrate",
+                diff="", branch="", cost_usd=0.0, tokens=0, is_error=False,
+                output_data={"pr_url": None, "branch": None, "base": base},
+            )
+            ctx.record(art)
+            return art
+        branch = f"orch/{ctx.run_id}/merge"
+        try:
+            apply_diffs(Path(repo), branch, diffs, base=base)
+        except MergeConflict as conflict:
+            decision = interrupt({
+                "step_id": step.id,
+                "kind": "conflict",
+                "run_id": ctx.run_id,
+                "prompt": (
+                    "Merge conflict. Resolve base and reply approve to retry, reject to abort."
+                ),
+                "detail": str(conflict),
+            })
+            if str(decision).lower() == "reject":
+                art = Artifact(
+                    step_id=step.id,
+                    output=f"merge aborted on conflict: {conflict}",
+                    diff="",
+                    branch="",
+                    cost_usd=0.0,
+                    tokens=0,
+                    is_error=True,
+                )
+                ctx.record(art)
+                return art
+            # approve → retry once (base presumably resolved by the human).
+            try:
+                apply_diffs(Path(repo), branch, diffs, base=base)
+            except MergeConflict as retry_conflict:
+                art = Artifact(
+                    step_id=step.id,
+                    output=(
+                        f"merge still conflicts after resume; base not resolved: {retry_conflict}"
+                    ),
+                    diff="", branch="", cost_usd=0.0, tokens=0, is_error=True,
+                )
+                ctx.record(art)
+                return art
+
+        pr = open_pull_request(Path(repo), branch, base=base, title=f"orchestrator: {ctx.run_id}")
+        span.set_attribute("merge.branch", branch)
+        span.set_attribute("merge.pr_url", pr)
+        art = Artifact(
+            step_id=step.id,
+            output=f"opened PR for {branch} -> {base}: {pr}",
+            diff="",
+            branch=branch,
+            cost_usd=0.0,
+            tokens=0,
+            is_error=False,
+            output_data={"pr_url": pr, "branch": branch, "base": base},
+        )
+        ctx.record(art)
+        return art
