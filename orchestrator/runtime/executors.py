@@ -1,4 +1,9 @@
-"""Step executors (spec §6). M3 adds task steps + the success_criteria/retry loop."""
+"""Step executors (spec §6).
+
+M3 added task steps + the success_criteria/retry inner loop. M4 added agent-step
+verdict parsing (output_data from the harness result), the test-count gate, and the
+per-step attempt counter + /{attempt} branch suffix (cycle re-entry safe).
+"""
 
 from __future__ import annotations
 

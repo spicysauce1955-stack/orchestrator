@@ -1,8 +1,10 @@
 """Compile a pipeline to a validated IR + LangGraph StateGraph (spec §6).
 
-M1 lowers to LangGraph with placeholder node functions (no execution). This proves
-the typed-pipeline + on_reject cycle map cleanly onto StateGraph (open question #13).
-Real step executors arrive in M3.
+`to_state_graph` here lowers to LangGraph with placeholder nodes for compile-time
+validation (`orch compile`) — it proves the typed-pipeline + on_reject cycle map
+cleanly onto StateGraph (open question #13, resolved M3). Actual execution is the
+`DeterministicScheduler` (runtime/), which reuses `wire_edges` with real node
+closures and a verdict-aware router (M3/M4).
 """
 
 from __future__ import annotations
