@@ -58,8 +58,30 @@ def main() -> int:
     if script_env:
         script = Path(script_env)
     elif script_dir:
-        name = "classify.ndjson" if "classify" in prompt.lower() else "default.ndjson"
-        script = Path(script_dir) / name
+        pl = prompt.lower()
+        if "classify" in pl:
+            keyword = "classify"
+        elif "review" in pl:
+            keyword = "review"
+        else:
+            keyword = "default"
+        script = Path(script_dir) / f"{keyword}.ndjson"
+        state_file = os.environ.get("ORCH_FAKE_STATE")
+        if state_file and keyword != "default":
+            import json as _json
+
+            try:
+                state = _json.loads(Path(state_file).read_text())
+            except (OSError, ValueError):
+                state = {}
+            n = int(state.get(keyword, 0)) + 1
+            state[keyword] = n
+            Path(state_file).write_text(_json.dumps(state))
+            numbered = Path(script_dir) / f"{keyword}.{n}.ndjson"
+            if numbered.exists():
+                script = numbered
+        if not script.exists():
+            script = Path(script_dir) / "default.ndjson"
     else:
         script = DEFAULT_SCRIPT
     for line in script.read_text().splitlines():

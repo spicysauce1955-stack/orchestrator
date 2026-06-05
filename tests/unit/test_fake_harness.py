@@ -71,6 +71,29 @@ def test_fake_delete_removes_file(tmp_path, monkeypatch):
     assert not victim.exists()
 
 
+def test_state_selects_numbered_review_variant(tmp_path, monkeypatch):
+    import os
+
+    state = tmp_path / "state.json"
+    env = {
+        **os.environ,
+        "ORCH_FAKE_SCRIPT_DIR": str(SCRIPTS_DIR),
+        "ORCH_FAKE_STATE": str(state),
+    }
+
+    def run():
+        return subprocess.run(
+            [sys.executable, str(FAKE), "-p", "Please review this",
+             "--output-format", "stream-json"],
+            env=env, capture_output=True, text=True,
+        ).stdout
+
+    first = run()   # review.1.ndjson -> reject
+    second = run()  # review.2.ndjson -> approve
+    assert "reject" in first
+    assert "approve" in second
+
+
 def test_calls_log_appends_per_invocation(tmp_path):
     calls = tmp_path / "calls.log"
     env = {**os.environ, "ORCH_FAKE_SCRIPT": str(PLAN), "ORCH_FAKE_CALLS": str(calls)}
