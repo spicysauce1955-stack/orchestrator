@@ -10,6 +10,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from langgraph.types import interrupt
+
 from orchestrator.config.loader import Workspace
 from orchestrator.config.schemas import Pipeline, Step
 from orchestrator.eval.criteria import count_tests, run_success_criteria, test_count_regressed
@@ -250,3 +252,23 @@ async def run_task_step(
     )
     ctx.record(artifact)
     return artifact
+
+
+def run_gate_step(step: Step, ctx: RunContext) -> str:
+    """HITL gate: interrupt() halts+checkpoints the run; on resume returns the decision.
+
+    The payload summarizes the run for the human. The returned value
+    ('approve'|'reject') is stored in ctx.gate_decisions for the conditional edge.
+    """
+    last = next(reversed(ctx.artifacts.values()), None) if ctx.artifacts else None
+    payload = {
+        "step_id": step.id,
+        "prompt": f"Approve step '{step.id}'? Reply approve|reject.",
+        "run_id": ctx.run_id,
+        "last_output": (last.output[:500] if last else ""),
+        "total_cost_usd": ctx.total_cost_usd,
+    }
+    decision = interrupt(payload)
+    decision = "reject" if str(decision).lower() == "reject" else "approve"
+    ctx.gate_decisions[step.id] = decision
+    return decision

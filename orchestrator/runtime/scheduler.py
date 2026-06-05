@@ -12,7 +12,7 @@ from pathlib import Path
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, StateGraph
-from langgraph.types import Command  # noqa: F401
+from langgraph.types import Command
 
 from orchestrator.compile.compiler import wire_edges
 from orchestrator.compile.ir import build_ir
@@ -21,7 +21,7 @@ from orchestrator.config.schemas import Pipeline, Step, StepType
 from orchestrator.eval.verdict import Verdict
 from orchestrator.harness.adapter import HarnessAdapter
 from orchestrator.observability.spans import SPAN_RUN, get_tracer
-from orchestrator.runtime.executors import run_agent_step, run_task_step
+from orchestrator.runtime.executors import run_agent_step, run_gate_step, run_task_step
 from orchestrator.runtime.state import CHECKPOINT_SERDE_MODULES, GraphState, RunContext, RunStatus
 
 _SERDE = JsonPlusSerializer(allowed_msgpack_modules=CHECKPOINT_SERDE_MODULES)
@@ -44,6 +44,9 @@ class DeterministicScheduler:
             if checkpoint_db is not None
             else self.repo / ".orch" / "checkpoints.sqlite"
         )
+        # Cache pipelines registered via run() so resume() can look them up even when
+        # the pipeline was constructed dynamically and is not part of the workspace.
+        self._pipeline_cache: dict[str, Pipeline] = {}
 
     def _make_node(self, pipeline: Pipeline, step: Step):
         async def node(state: GraphState) -> dict:
@@ -57,20 +60,25 @@ class DeterministicScheduler:
                     self.workspace, pipeline, step, ctx, repo=self.repo, adapter=self.adapter
                 )
             else:  # gate
-                raise NotImplementedError(f"gate step '{step.id}' runs in M5")
+                run_gate_step(step, ctx)
             return {"ctx": ctx}
 
         return node
 
-    def _verdict_router(self, pipeline: Pipeline):
+    def _router(self, pipeline: Pipeline):
         by_id = {s.id: s for s in pipeline.steps}
 
         def router(source: str, targets: list[str]):
-            reject_target = by_id[source].on_reject
+            src = by_id[source]
+            reject_target = src.on_reject
             forward = [t for t in targets if t != reject_target]
 
             def route_fn(state: GraphState) -> str:
                 ctx = state["ctx"]
+                if src.type == StepType.gate:
+                    if ctx.gate_decisions.get(source) == "reject":
+                        return END
+                    return forward[0] if forward else END
                 art = ctx.artifacts.get(source)
                 verdict = (art.output_data or {}).get("verdict") if art else None
                 if (
@@ -98,7 +106,7 @@ class DeterministicScheduler:
         builder = StateGraph(GraphState)
         for node_id in ir.nodes:
             builder.add_node(node_id, self._make_node(pipeline, by_id[node_id]))
-        wire_edges(builder, ir, router=self._verdict_router(pipeline))
+        wire_edges(builder, ir, router=self._router(pipeline))
         return builder.compile(checkpointer=saver)
 
     def _finalize(self, result: dict) -> RunContext:
@@ -114,6 +122,7 @@ class DeterministicScheduler:
     async def run(
         self, pipeline: Pipeline, inputs: dict[str, str], run_id: str
     ) -> RunContext:
+        self._pipeline_cache[pipeline.name] = pipeline
         ctx = RunContext(run_id=run_id, inputs=dict(inputs), pipeline_name=pipeline.name)
         config = {"configurable": {"thread_id": run_id}, "recursion_limit": 100}
         tracer = get_tracer()
@@ -124,3 +133,18 @@ class DeterministicScheduler:
                 run_span.set_attribute("pipeline", pipeline.name)
                 result = await graph.ainvoke({"ctx": ctx}, config)
         return self._finalize(result)
+
+    async def resume(self, run_id: str, decision: str) -> RunContext:
+        config = {"configurable": {"thread_id": run_id}, "recursion_limit": 100}
+        async with self._saver() as saver:
+            ckpt = await saver.aget(config)
+            if ckpt is None:
+                raise KeyError(f"no checkpoint for run '{run_id}'")
+            ctx_pre = ckpt["channel_values"]["ctx"]
+            pipeline_name = ctx_pre.pipeline_name
+            pipeline = (
+                self._pipeline_cache.get(pipeline_name) or self.workspace.pipelines[pipeline_name]
+            )
+            graph = self._build(pipeline, saver)
+            result = await graph.ainvoke(Command(resume=decision), config)
+            return self._finalize(result)

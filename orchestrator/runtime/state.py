@@ -17,6 +17,7 @@ class RunStatus(str, Enum):
 CHECKPOINT_SERDE_MODULES = [
     ("orchestrator.runtime.state", "RunContext"),
     ("orchestrator.runtime.state", "Artifact"),
+    ("orchestrator.runtime.state", "RunStatus"),
 ]
 
 
