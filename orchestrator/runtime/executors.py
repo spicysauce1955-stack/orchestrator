@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
-import re
 import subprocess
 from pathlib import Path
 
 from orchestrator.config.loader import Workspace
 from orchestrator.config.schemas import Pipeline, Step
+from orchestrator.eval.criteria import run_success_criteria
+from orchestrator.eval.verdict import parse_output
 from orchestrator.harness.adapter import HarnessAdapter
 from orchestrator.harness.events import Cost, Done, FileEdit, MessageChunk, ToolCall
 from orchestrator.isolation.worktree import create_worktree, remove_worktree
@@ -52,14 +52,6 @@ def _capture_diff(cwd: Path) -> str:
         names = "\n".join(f"+++ untracked: {n}" for n in untracked.splitlines())
         tracked = f"{tracked}\n{names}" if tracked else names
     return tracked
-
-
-def _run_success_criteria(criteria: str, cwd: Path) -> tuple[bool, str]:
-    """Run the success_criteria shell command in `cwd`. Returns (ok, combined output)."""
-    proc = subprocess.run(
-        criteria, cwd=cwd, shell=True, capture_output=True, text=True
-    )
-    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
 
 
 class _Aggregate:
@@ -163,7 +155,7 @@ async def run_agent_step(
 
                 if not step.success_criteria:
                     break
-                ok, crit_out = _run_success_criteria(step.success_criteria, worktree.path)
+                ok, crit_out = run_success_criteria(step.success_criteria, worktree.path)
                 step_span.set_attribute(f"success_criteria.attempt_{attempt}", ok)
                 if ok:
                     is_error = False
@@ -192,49 +184,6 @@ async def run_agent_step(
         remove_worktree(Path(repo), worktree)
 
 
-_ENUM_RE = re.compile(r"enum\[([^\]]*)\]")
-
-
-def _parse_task_output(output: str, output_schema: dict | None) -> tuple[dict | None, bool]:
-    """Parse a task step's textual output into structured output_data.
-
-    MVP: if output_schema declares a single enum field, accept either a JSON object
-    {field: value} or a bare value, and validate enum membership. Returns
-    (output_data, is_error). With no output_schema, output_data is None (ok).
-    """
-    if not output_schema:
-        return None, False
-
-    # Try JSON first.
-    data: dict | None = None
-    try:
-        loaded = json.loads(output)
-        if isinstance(loaded, dict):
-            data = loaded
-    except (json.JSONDecodeError, TypeError):
-        data = None
-
-    # Validate each enum-typed field.
-    for field_name, spec in output_schema.items():
-        allowed = None
-        if isinstance(spec, str):
-            m = _ENUM_RE.fullmatch(spec.strip())
-            if m:
-                allowed = [v.strip() for v in m.group(1).split(",") if v.strip()]
-        if allowed is None:
-            continue
-        value = None
-        if data is not None and field_name in data:
-            value = str(data[field_name]).strip()
-        elif len(output_schema) == 1:
-            value = output.strip()  # bare value for a single-field schema
-        if value not in allowed:
-            return None, True
-        data = {**(data or {}), field_name: value}
-
-    return data, False
-
-
 async def run_task_step(
     workspace: Workspace,
     pipeline: Pipeline,
@@ -259,7 +208,7 @@ async def run_task_step(
             adapter, caps, Path(repo), prompt, step.output_schema, tracer
         )
         output = agg.result_text or agg.output  # task output is the final result text
-        output_data, parse_error = _parse_task_output(output, step.output_schema)
+        output_data, parse_error = parse_output(output, step.output_schema)
         is_error = agg.is_error or parse_error
         step_span.set_attribute("step.is_error", is_error)
 
