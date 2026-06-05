@@ -56,6 +56,7 @@ async def test_gate_fails_when_tests_deleted(tmp_path, monkeypatch):
     )
     assert art.is_error is True
     assert "test-count" in art.output.lower()
+    assert "2->0" in art.output  # the gate reports the actual regression (2 tests -> 0)
 
 
 async def test_gate_passes_when_tests_intact(tmp_path, monkeypatch):

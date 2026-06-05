@@ -40,3 +40,15 @@ def test_test_count_regressed():
     assert check_test_count_regressed(3, 2) is True
     assert check_test_count_regressed(2, 2) is False
     assert check_test_count_regressed(2, 5) is False
+
+
+def test_count_tests_works_under_worktrees_ancestor(tmp_path):
+    """Regression: count_tests must not skip files because '.worktrees' (or '.git')
+    appears in an ANCESTOR of the counted root — only relative parts are skipped.
+    The gate runs on a worktree literally under repo/.worktrees/, so this case
+    is load-bearing: if it regressed, count_tests would return 0 and the gate
+    would be silently dead."""
+    wt = tmp_path / ".worktrees" / "orch-run1-implement-1"
+    wt.mkdir(parents=True)
+    (wt / "test_x.py").write_text("def test_alpha():\n    pass\n\ndef test_beta():\n    pass\n")
+    assert count_tests(wt) == 2

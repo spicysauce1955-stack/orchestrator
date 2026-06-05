@@ -6,6 +6,8 @@ Behavior:
 - Streams the NDJSON file at $ORCH_FAKE_SCRIPT to stdout (default: plan.ndjson).
 - If $ORCH_FAKE_TOUCH is set, creates that file in the CWD before emitting the
   result (simulates a harness writing a file, so diff capture has something to see).
+- If $ORCH_FAKE_DELETE is set, deletes that file (relative to CWD) before emitting
+  the result (simulates an agent removing tests, to exercise the test-count gate).
 - Exits 0 unless $ORCH_FAKE_EXIT is set to a non-zero integer.
 """
 
