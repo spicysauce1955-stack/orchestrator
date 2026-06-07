@@ -12,6 +12,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from orchestrator.observability.spans import SPAN_SESSION
 from orchestrator.observability.store import connect
 
 
@@ -105,7 +106,7 @@ def run_metrics(db: Path, run_id: str) -> MetricsView | None:
             return None
         # session spans carry cost; group them under their parent step span.
         cost_by_parent: dict[str, tuple[float, int]] = {}
-        for row in _spans(conn, trace, "harness.session"):
+        for row in _spans(conn, trace, SPAN_SESSION):
             attrs = json.loads(row["attrs"])
             usd, tok = cost_by_parent.get(row["parent_id"], (0.0, 0))
             cost_by_parent[row["parent_id"]] = (
@@ -125,7 +126,7 @@ def run_metrics(db: Path, run_id: str) -> MetricsView | None:
                     step_id=str(attrs.get("step.id", "")),
                     cost_usd=usd,
                     tokens=tok,
-                    duration_ms=(int(row["end_ns"]) - int(row["start_ns"])) / 1e6,
+                    duration_ms=max(0.0, (int(row["end_ns"]) - int(row["start_ns"])) / 1e6),
                 )
             )
     return MetricsView(

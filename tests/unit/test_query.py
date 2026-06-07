@@ -108,3 +108,15 @@ def test_run_messages_returns_message_spans_in_order(tmp_path: Path) -> None:
         ("implement", "orchestrator", "question", "which db?"),
         ("orchestrator", "implement", "answer", "sqlite"),
     ]
+
+
+def test_run_metrics_unknown_run_returns_none(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    _seed(db)
+    assert run_metrics(db, "nope") is None
+
+
+def test_run_messages_unknown_run_returns_empty(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    _seed(db)
+    assert run_messages(db, "nope") == []
