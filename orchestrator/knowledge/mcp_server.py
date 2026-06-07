@@ -17,7 +17,7 @@ from orchestrator.knowledge.lexical import search
 PROTOCOL_VERSION = "2024-11-05"
 
 
-@dataclass
+@dataclass(frozen=True)
 class ServerState:
     sources: list[str]
     root: Path
@@ -49,11 +49,11 @@ def _tools(state: ServerState) -> list[dict]:
     return tools
 
 
-def _ok(req_id, result) -> dict:
+def _ok(req_id: int | None, result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 
-def _err(req_id, code, message) -> dict:
+def _err(req_id: int | None, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 
@@ -70,6 +70,8 @@ def _do_search(state: ServerState, args: dict) -> dict:
 
 
 def _do_write(state: ServerState, args: dict) -> dict:
+    # Defense-in-depth: `write` is hidden from tools/list when ungranted, but
+    # re-check here in case a forged tools/call reaches this handler.
     if state.write_target is None:
         return _text("write not permitted for this role", is_error=True)
     lesson = str(args.get("lesson", "")).strip()

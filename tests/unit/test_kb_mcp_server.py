@@ -75,3 +75,17 @@ def test_unknown_method_returns_error(tmp_path):
         {"jsonrpc": "2.0", "id": 6, "method": "bogus/method"}, _state(tmp_path)
     )
     assert resp["error"]["code"] == -32601
+
+
+def test_ping_returns_empty_result(tmp_path):
+    resp = handle_request({"jsonrpc": "2.0", "id": 7, "method": "ping"}, _state(tmp_path))
+    assert resp["result"] == {}
+
+
+def test_call_write_empty_lesson_is_error(tmp_path):
+    resp = handle_request(
+        {"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+         "params": {"name": "write", "arguments": {"lesson": "   "}}},
+        _state(tmp_path, write=True),
+    )
+    assert resp["result"]["isError"] is True
