@@ -8,6 +8,9 @@ harnesses define the contract, real-harness reconciliation is a follow-up.
 
 from __future__ import annotations
 
+import json
+import os
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -111,3 +114,31 @@ def handle_request(req: dict, state: ServerState) -> dict | None:
             return _ok(req_id, _do_write(state, args))
         return _ok(req_id, _text(f"unknown tool '{name}'", is_error=True))
     return _err(req_id, -32601, f"method not found: {method}")
+
+
+def state_from_env() -> ServerState:
+    sources = json.loads(os.environ.get("ORCH_KB_SOURCES", "[]"))
+    root = Path(os.environ.get("ORCH_KB_ROOT", "."))
+    wt = os.environ.get("ORCH_KB_WRITE_TARGET")
+    return ServerState(sources=sources, root=root, write_target=Path(wt) if wt else None)
+
+
+def main() -> int:
+    state = state_from_env()
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        resp = handle_request(req, state)
+        if resp is not None:
+            sys.stdout.write(json.dumps(resp) + "\n")
+            sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
