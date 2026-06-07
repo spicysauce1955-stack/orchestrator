@@ -202,7 +202,7 @@ def status(
 @app.command()
 def metrics(
     run_id: str = typer.Argument(...),
-    repo: Path = typer.Option(Path("."), "--repo"),
+    repo: Path = typer.Option(Path("."), "--repo", help="Repo whose .orch/ holds the span store."),
 ) -> None:
     """Show a run's cost/token/duration rollup from the span store (spec §9)."""
     view = run_metrics(_span_db(repo), run_id)
@@ -219,10 +219,12 @@ def metrics(
 @app.command()
 def memory(
     run_id: str = typer.Argument(...),
-    repo: Path = typer.Option(Path("."), "--repo"),
+    repo: Path = typer.Option(Path("."), "--repo", help="Repo whose .orch/ holds the span store."),
 ) -> None:
     """Show a run's coordination board (message bus log) from the span store."""
     msgs = run_messages(_span_db(repo), run_id)
+    # run_messages returns [] for both an unknown run and a run with no messages;
+    # the MVP does not distinguish them here.
     if not msgs:
         typer.echo(f"run '{run_id}': no messages recorded.")
         return
