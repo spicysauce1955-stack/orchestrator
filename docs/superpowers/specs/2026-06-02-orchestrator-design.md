@@ -1,6 +1,9 @@
 # Orchestrator — Design Spec
 
 > **Status:** Approved design (brainstorm complete) · **Date:** 2026-06-02
+> **Revised:** 2026-06-07 — added §14 post-MVP enhancements from competitive analysis
+> (`research/competitors.md`); folded the durable span store + `status`/`metrics`/`memory` lenses
+> into M6d (§9, §12); added milestones M7–M9. MVP boundary (M6) unchanged.
 > **Scope of this spec:** full architecture sketch + a detailed, runnable **MVP vertical slice**.
 > Grounded in `research/` (snapshot 2026-06-02). Re-verify "current" vendor claims before building.
 
@@ -46,7 +49,9 @@ KNOWLEDGE      core (always-loaded) + on-demand (lexical MCP) · AGENTS.md     �
 
 ### Components (one `orch run`)
 
-- **CLI** (`orch run|status|resume|compile`) — entry point; streams progress; resumes interrupted runs.
+- **CLI** (`orch run|status|metrics|memory|resume|compile`) — entry point; streams progress; resumes
+  interrupted runs; `status`/`metrics`/`memory` are lenses over the span store (§9). (`orch init` /
+  `orch new --template` scaffolder is post-MVP, §4.2/§14.)
 - **Config loader + validator** — reads `.orchestrator/`, validates against Pydantic schemas, resolves role/skill/knowledge references by name.
 - **Compiler** — pipeline → LangGraph `StateGraph`; topo-sort; typed-I/O reference checks; `file_scope` overlap warnings.
 - **Controller** (the mode seam, §6) — `DeterministicScheduler` | `AgenticSupervisor`.
@@ -155,7 +160,10 @@ via `git diff` in the worktree (harness JSON omits diffs). The compiler validate
 artifacts exist and types align.
 
 **Composites (specced, lowered to the same node/edge graph):** `sequence`, `parallel`, `router`
-(classify→branch), `best-of-n` (fan-out). MVP runs a flat list + one `on_reject` cycle.
+(classify→branch), `best-of-n` (fan-out). MVP runs a flat list + one `on_reject` cycle. **`best-of-n`
+selection** (post-MVP, §14): the N candidates are not picked first-wins — a read-only **judge** (the
+existing `reviewer`/agent-as-judge role) scores them and selects the winner. This is our governed
+analog of swarm "consensus voting": one accountable judge with a verdict artifact, not an opaque vote.
 
 ### 4.1 Access / capability model (7 dimensions)
 
@@ -178,6 +186,13 @@ controls:
 - **OpenCode** — `permission` map · **no OS sandbox → orchestrator supplies worktree/container isolation**.
 
 A role speaks in abstract capabilities, so it is portable across harnesses.
+
+### 4.2 Recipe / template library (post-MVP, §14)
+
+Declarative configs have a blank-page problem. A curated, versioned **template library** of vetted
+pipelines (e.g. `review-heavy`, `bugfix-fast`, `mixed-harness`) — promoted from today's `examples/` to
+first-class, named recipes — plus an `orch init` / `orch new --template <name>` scaffolder that seeds a
+working `.orchestrator/` in one command. Adoption lever, not a new engine capability.
 
 ## 5. Harness adapter (the swappability seam)
 
@@ -291,12 +306,34 @@ Light/context-injection (decision #2):
 **Closed loop:** `audit` writes durable lessons → next run's `plan`/`implement` read them as
 core/on-demand context.
 
+### 8.1 Knowledge mining (post-MVP, §14)
+
+Today knowledge is written *only* on explicit auditor action — nothing is captured from what agents
+actually did. Borrowing the *capture → codify → propagate* idea (but **not** the ungated auto-write)
+from cross-agent memory tools: an **offline miner** scans the durable span store (§9) after runs for
+repeated patterns (recurring failures, fixes, decisions), and emits **candidate lessons**. Candidates
+are not written directly — the **`auditor` role vets them** (its `audit` step gains a "review mined
+candidates" duty) and approves through the existing auditor-gated `mcp__knowledge__write` path
+(deny-wins, §4.1/§8). The differentiator stands: capture is automatic, but every write stays
+**governed and attributable**. Depends on the queryable span store (M6d).
+
 ## 9. Observability, safety & testing
 
 **Observability** (the orchestrator's job): OTel GenAI spans for `run`, `step`, `harness session`,
-`tool-call`, `file-edit`, `eval`, `merge`, each **message-bus message**, `HITL gate`; cost/tokens roll
-up per step → run vs budget. `orch status <run>` is a *derived view* of spans. MVP sink: OTLP to
-file/SQLite; Langfuse optional exporter.
+`tool-call`, `file-edit`, `eval`, `merge`, each **message-bus message**, `knowledge-write`, `MCP-call`,
+`HITL gate`; cost/tokens roll up per step → run vs budget. MVP sink: OTLP to file/SQLite; Langfuse
+optional exporter.
+
+**Durable, queryable span store (M6d).** The SQLite sink is a **structured span table** (one row per
+span with `run_id`, `kind`, `parent`, timing, cost, attrs) — the *single record of truth*. `orch status`
+queries it rather than re-parsing raw output. (This is the "structured & queryable" borrow from
+swarm-style coordination blackboards — but spans stay the only durable record; we do not add a parallel
+store.) Three CLI lenses over the same table:
+- `orch status <run>` — run/step state (which step, pass/attempt, terminal verdict, PAUSED/resume hint).
+- `orch metrics <run>` — cost/tokens/timings rolled up per step and per run vs budget.
+- `orch memory <run>` — the message-bus log + knowledge writes for the run.
+
+This store is also the data source the post-MVP knowledge miner (§8.1) scans.
 
 **Safety baseline.** *Built in MVP:* worktree isolation (default) · credential-path exclusion ·
 harness config read-only · command deny-list hard-blocks · never-push-main → PR-only · writer≠reviewer
@@ -325,10 +362,12 @@ isolation · knowledge provider (core + on-demand lexical + auditor-gated write)
 span-emitting message bus · OTel spans + cost + `orch status` · SQLite checkpointer · CLI
 (`orch run|status|resume|compile`) · safety baseline above.
 
-**Specced, not built:** `AgenticSupervisor` mode · best-of-N fan-out + parallel reviewers · ACP
-adapter · Codex adapter · container/microVM sandbox + full egress · embeddings/vector knowledge ·
-semantic-rebase conflict agent · direct worker↔worker (A2A) peer messaging · durable execution
-(Temporal/Conductor) · A2A remote-agent delegation.
+**Specced, not built:** `AgenticSupervisor` mode · best-of-N fan-out + parallel reviewers (with
+**judge-based selection**, §4/§14) · ACP adapter · Codex adapter · container/microVM sandbox + full
+egress · embeddings/vector knowledge · semantic-rebase conflict agent · direct worker↔worker (A2A) peer
+messaging · durable execution (Temporal/Conductor) · A2A remote-agent delegation · **knowledge mining**
+(§8.1) · **recipe/template library + `orch init`** (§4.2). The last three are the post-MVP milestones
+M7–M9 (§12); see §14 for provenance.
 
 ## 11. Repository layout
 
@@ -356,8 +395,19 @@ tests/           unit/ · integration/ · fixtures/fake_harness/
 - **M3** — full DAG executor + task step: `classify → plan → implement` with `success_criteria`/retry.
 - **M4** — review loop + agent-as-judge + test-count gate.
 - **M5** — HITL gate + resume + merge→PR + conflict gate.
-- **M6** — orchestrator agent (run-owner, message bus, worker Q&A) + knowledge provider (core +
-  on-demand + gated write) + OpenCode adapter + observability/status + safety baseline polish.
+- **M6** (final MVP milestone, built as sub-milestones) — **M6a** OpenCode adapter + harness registry ·
+  **M6b** knowledge provider (core + on-demand lexical + auditor-gated write) · **M6c** orchestrator
+  agent (run-owner, message bus, worker Q&A) · **M6d** observability/status + safety baseline polish —
+  now scoped to build the **durable, queryable span store** and the **`orch status`/`metrics`/`memory`**
+  lenses over it (§9).
+
+**Post-MVP milestones** (from competitive analysis, §14; planned one at a time when next, per project
+rhythm — not planned in advance):
+- **M7** — knowledge mining (§8.1): offline miner over the span store → candidate lessons → `auditor`
+  vets → existing gated write. Depends on M6d's span store.
+- **M8** — adoption: recipe/template library + `orch init` / `orch new --template` scaffolder (§4.2).
+- **M9** — `best-of-n` fan-out with judge-based selection (§4): N candidates scored/selected by the
+  read-only agent-as-judge role.
 
 ## 13. Open questions / risks
 
@@ -372,4 +422,27 @@ tests/           unit/ · integration/ · fixtures/fake_harness/
   post-MVP increment if conflicts dominate.
 - **Agent-as-judge cost** — reviewer runs a full harness; cap with budget + prefer deterministic
   `success_criteria` where an oracle exists.
+
+## 14. Post-MVP enhancements (competitive analysis, 2026-06-07)
+
+Sourced from a head-to-head against **Claude-Flow "Hive Mind"** (queen-led emergent swarm, Claude-only)
+and **activeloopai/hivemind** (cross-agent memory layer) — see [`research/competitors.md`](../../../research/competitors.md).
+The guiding principle: **borrow tactics that strengthen our bets (declarative, deterministic,
+multi-harness, governed); resist anything that erodes them** (auto-scaling, ungated auto-writes,
+emergent swarm as default, Claude-only coupling). Five enhancements:
+
+| # | Enhancement | Borrowed from | Lands in | Spec |
+|---|-------------|---------------|----------|------|
+| 1 | **Mined-candidate knowledge capture** — offline miner → `auditor` vets → gated write | hivemind *capture→codify→propagate* (minus the ungated write) | **M7** | §8.1 |
+| 2 | **Durable, queryable span store** — structured SQLite span table as single record of truth | Claude-Flow's SQLite coordination blackboard (minus the parallel store) | **M6d** | §9 |
+| 3 | **`status`/`metrics`/`memory` CLI lenses** over the span store | Claude-Flow's `hive-mind status`/`metrics`/`memory` triad | **M6d** | §3, §9 |
+| 4 | **Recipe/template library + `orch init`** scaffolder | Claude-Flow's SPARC named-workflow templates | **M8** | §4.2 |
+| 5 | **`best-of-n` judge-based selection** — agent-as-judge scores/selects candidates | Claude-Flow's consensus voting (one accountable judge instead) | **M9** | §4, §10 |
+
+**Why these and not more:** #2/#3 only shape the not-yet-built M6d, so they fold into the MVP close
+without expanding scope. #1 turns our biggest gap (no automatic capture) into a *governed* feature that
+out-positions hivemind on auditability. #4 is the cheapest adoption lever (declarative configs have a
+blank-page problem). #5 gives the already-specced `best-of-n` a principled selection strategy. Deliberately
+**not** adopted: dynamic worker auto-scaling, ungated mining, emergent-swarm-as-default — those belong (if
+ever) inside the opt-in `AgenticSupervisor` mode (§6), never the deterministic default.
 ```
