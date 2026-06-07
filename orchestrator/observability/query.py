@@ -131,3 +131,35 @@ def run_metrics(db: Path, run_id: str) -> MetricsView | None:
     return MetricsView(
         run_id=run_id, steps=steps, total_cost_usd=total_usd, total_tokens=total_tok
     )
+
+
+@dataclass
+class MessageView:
+    frm: str
+    to: str
+    kind: str
+    body: str
+
+
+def run_messages(db: Path, run_id: str) -> list[MessageView]:
+    """The coordination board for a run: `message` spans in time order.
+
+    Forward-compatible: when `knowledge.write` span emission lands (deferred,
+    cross-process), add its name here — no caller change needed.
+    """
+    with contextlib.closing(_open(db)) as conn:
+        trace = _trace_for_run(conn, run_id)
+        if trace is None:
+            return []
+        out: list[MessageView] = []
+        for row in _spans(conn, trace, "message"):
+            attrs = json.loads(row["attrs"])
+            out.append(
+                MessageView(
+                    frm=str(attrs.get("msg.from", "")),
+                    to=str(attrs.get("msg.to", "")),
+                    kind=str(attrs.get("msg.kind", "")),
+                    body=str(attrs.get("msg.body", "")),
+                )
+            )
+    return out

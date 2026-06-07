@@ -3,8 +3,9 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from orchestrator.observability.query import run_metrics, run_status
+from orchestrator.observability.query import run_messages, run_metrics, run_status
 from orchestrator.observability.spans import (
+    SPAN_MESSAGE,
     SPAN_RUN,
     SPAN_SESSION,
     SPAN_STEP,
@@ -80,3 +81,30 @@ def test_run_metrics_rolls_up_cost_per_step_and_total(tmp_path: Path) -> None:
     assert view.total_cost_usd == 0.5
     assert view.total_tokens == 1000
     assert by_step["implement"].duration_ms >= 0.0
+
+
+def test_run_messages_returns_message_spans_in_order(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    configure_tracing(exporter=SqliteSpanExporter(db))
+    tracer = get_tracer()
+    with tracer.start_as_current_span(SPAN_RUN) as run:
+        run.set_attribute("run.id", "r2")
+        run.set_attribute("pipeline", "qa-demo")
+        for frm, to, kind, body in [
+            ("orchestrator", "implement", "classify", "feature"),
+            ("implement", "orchestrator", "question", "which db?"),
+            ("orchestrator", "implement", "answer", "sqlite"),
+        ]:
+            with tracer.start_as_current_span(SPAN_MESSAGE) as m:
+                m.set_attribute("msg.from", frm)
+                m.set_attribute("msg.to", to)
+                m.set_attribute("msg.kind", kind)
+                m.set_attribute("msg.body", body)
+
+    msgs = run_messages(db, "r2")
+
+    assert [(m.frm, m.to, m.kind, m.body) for m in msgs] == [
+        ("orchestrator", "implement", "classify", "feature"),
+        ("implement", "orchestrator", "question", "which db?"),
+        ("orchestrator", "implement", "answer", "sqlite"),
+    ]
