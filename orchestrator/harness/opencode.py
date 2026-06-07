@@ -16,9 +16,13 @@ from orchestrator.harness.events import (
     SessionStarted,
     ToolCall,
 )
+from orchestrator.safety.capabilities import ResolvedCaps
 
 # OpenCode tool names that mutate files → also emit a FileEdit.
 _EDIT_TOOLS = {"edit": "modify", "write": "create", "patch": "modify"}
+
+# Credential-ish paths excluded from reads (mirrors spec §4.1 fs credential exclusion).
+_READ_DENY = ["*.env", "*.env.*", "**/.ssh/**", "**/.aws/**"]
 
 
 def parse_opencode_line(obj: dict, tool_names: dict[str, str]) -> list[Event]:
@@ -54,3 +58,36 @@ def parse_opencode_line(obj: dict, tool_names: dict[str, str]) -> list[Event]:
         return [Cost(usd=float(obj.get("cost", 0.0)), tokens=int(obj.get("tokens", 0)))]
 
     return []
+
+
+def _can_edit(caps: ResolvedCaps) -> bool:
+    edit_markers = {"Edit", "Write", "MultiEdit", "edit", "write", "patch"}
+    if any(t in edit_markers for t in caps.disallowed_tools):
+        return False
+    return any(t in edit_markers for t in caps.allowed_tools) or caps.permission_mode != "default"
+
+
+def build_permission_config(caps: ResolvedCaps) -> dict:
+    """ResolvedCaps → an OpenCode `permission` config (best-effort).
+
+    OpenCode has no OS sandbox; this constrains the agent's tools, while the
+    worktree remains the hard filesystem boundary.
+    """
+    can_edit = _can_edit(caps)
+    shell_deny = tuple(getattr(caps, "shell_deny", ()) or ())
+    bash: dict[str, str] | str
+    if not can_edit:
+        bash = "deny"
+    else:
+        bash = {f"{pat}*" if not pat.endswith("*") else pat: "deny" for pat in shell_deny}
+        bash["*"] = "allow"
+    read = {"*": "allow"}
+    for pat in _READ_DENY:
+        read[pat] = "deny"
+    return {
+        "permission": {
+            "edit": "allow" if can_edit else "deny",
+            "bash": bash,
+            "read": read,
+        }
+    }
