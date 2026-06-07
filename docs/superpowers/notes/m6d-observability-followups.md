@@ -24,3 +24,10 @@ store and the `orch status|metrics|memory` lenses).
   policy; the `.orch/spans.sqlite` file grows unbounded.
 - **`orch metrics` surfaces step-level durations only.** Run-level wall-clock and
   budget-vs-actual are not surfaced yet.
+- **`orch resume` exports under a fresh trace with no `run` span.** `resume()`
+  (scheduler) does not open a `SPAN_RUN`, so a resume-only execution writes step
+  spans under a new trace_id that `_trace_for_run` can't resolve by `run.id` — the
+  resumed steps won't show in `status`/`metrics`/`memory` for that run (the
+  original run's spans remain queryable). Pre-existing seam, newly relevant now
+  that resume exports to the store. Fix: open a `SPAN_RUN` (with `run.id`) around
+  the resumed execution, or carry the original trace.
