@@ -4,16 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-
-def _rpc(proc, obj):
-    proc.stdin.write(json.dumps(obj) + "\n")
-    proc.stdin.flush()
-
-
-def _read(proc):
-    line = proc.stdout.readline()
-    assert line.strip(), "subprocess produced no output (did it crash?)"
-    return json.loads(line)
+from tests.integration._rpc_helpers import rpc_read, rpc_send
 
 
 def _spawn(tmp_path, env_extra):
@@ -26,7 +17,8 @@ def _spawn(tmp_path, env_extra):
     full_env = {**os.environ, **env}
     return subprocess.Popen(
         [sys.executable, "-m", "orchestrator.knowledge.mcp_server"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=full_env,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, env=full_env,
         cwd=str(Path(__file__).parents[2]),
     )
 
@@ -34,12 +26,12 @@ def _spawn(tmp_path, env_extra):
 def test_stdio_initialize_and_search(tmp_path):
     proc = _spawn(tmp_path, {})
     try:
-        _rpc(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-        assert _read(proc)["result"]["serverInfo"]["name"] == "knowledge"
-        _rpc(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})  # no reply
-        _rpc(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        rpc_send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        assert rpc_read(proc)["result"]["serverInfo"]["name"] == "knowledge"
+        rpc_send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})  # no reply
+        rpc_send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                     "params": {"name": "search", "arguments": {"query": "drain stderr"}}})
-        out = _read(proc)["result"]["content"][0]["text"]
+        out = rpc_read(proc)["result"]["content"][0]["text"]
         assert "drain stderr" in out.lower()
     finally:
         proc.stdin.close()
@@ -50,9 +42,9 @@ def test_stdio_write_persists_to_target(tmp_path):
     target = tmp_path / "lessons.md"
     proc = _spawn(tmp_path, {"ORCH_KB_WRITE_TARGET": str(target)})
     try:
-        _rpc(proc, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        rpc_send(proc, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                     "params": {"name": "write", "arguments": {"lesson": "pin protocol version"}}})
-        assert _read(proc)["result"]["isError"] is False
+        assert rpc_read(proc)["result"]["isError"] is False
     finally:
         proc.stdin.close()
         proc.wait(timeout=5)
