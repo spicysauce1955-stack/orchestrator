@@ -4,7 +4,10 @@
 > `HarnessAdapter` (`OpenCodeCLIAdapter`) and a per-role `HarnessRegistry`, proving the project's
 > swappability thesis — **harness ≠ model**. A pipeline can now run different steps on different
 > harnesses: the `mixed-harness` example classifies on Claude (a `task` step) and implements on
-> OpenCode (an `agent` step bound to the `opencoder` role, `model: zhipu/glm-4.6`). The
+> OpenCode (an `agent` step bound to the `opencoder` role). The role declares `model: zhipu/glm-4.6`,
+> but note **that field is not yet threaded to the adapter at runtime** (see "Deferred" below) — what
+> M6a actually proves is per-**harness** routing; per-role **model** selection is a separate, still-open
+> dimension carried since M1. The
 > `DeterministicScheduler` resolves the adapter per `role.harness` in `_make_node` (agent steps) and
 > uses the registry default for task/merge/gate steps; a bare adapter still works via
 > `HarnessRegistry.single` (back-compat). `OpenCodeCLIAdapter` spawns `opencode run --format json`,
@@ -47,6 +50,21 @@
 
 ## Deferred / out of M6a scope (not bugs)
 
+- **`role.model` is not threaded to any adapter — project-wide gap, NOT an M6a regression.**
+  `Role.model` (`schemas.py`) has been unconsumed since M1: the Claude adapter does not even accept a
+  `model` param, and `HarnessRegistry.from_env()` builds `OpenCodeCLIAdapter()` with no model. The
+  registry is keyed by `Harness`, not by `(harness, model)`, so a per-role model would require
+  resolving/constructing adapters per step rather than per harness — an architectural change beyond
+  M6a's scope. Consequence: an OpenCode step runs on OpenCode's default model regardless of the role's
+  `model:` declaration. The adapter is *ready* for it (`OpenCodeCLIAdapter(model=...)` + `glm` alias),
+  so wiring it is a small follow-up once the registry/scheduler grow per-role adapter resolution.
+  M6a's milestone proof is the **harness** swap (routing), not the model swap.
+- **`build_permission_config` does not consume `caps.deny_read` / `caps.write_scope`.** It hardcodes a
+  fixed `_READ_DENY` list and a blanket `edit: allow` for edit roles, rather than translating the
+  resolver's computed `deny_read` (`.git`, `.claude`, `~/.kube`, `~/.config/gh`, …) or the role's
+  `filesystem.write` scope. This is consistent with "best-effort, no OS sandbox, worktree is the
+  boundary," but the deny-read set OpenCode receives is narrower than what Claude enforces — fold into
+  the reconciliation pass alongside the NDJSON field-name verification.
 - **`Codex` adapter not built.** `Harness.codex` is a valid enum value but
   `HarnessRegistry.adapter_for(Harness.codex)` raises `KeyError` (asserted in `test_registry.py`).
 - **`output_schema` not passed to OpenCode.** `prompt(..., output_schema=...)` is accepted but unused
