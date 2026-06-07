@@ -111,9 +111,8 @@ class DeterministicScheduler:
                     and reject_target is not None
                     and ctx.attempts.get(reject_target, 0) <= by_id[reject_target].max_retries
                 ):
-                    self.agent.relay_verdict(
-                        art.output if art else "reject", to_step=reject_target, ctx=ctx
-                    )
+                    # `verdict == REJECT` was read from art.output_data, so art is non-None here.
+                    self.agent.relay_verdict(art.output, to_step=reject_target, ctx=ctx)
                     return reject_target
                 return forward[0] if forward else END
 
