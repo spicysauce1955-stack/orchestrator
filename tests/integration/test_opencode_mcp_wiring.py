@@ -34,6 +34,7 @@ async def test_mcp_servers_in_opencode_config(monkeypatch, tmp_path):
     assert mcp["type"] == "local"
     assert mcp["command"] == [sys.executable, "-m", "orchestrator.knowledge.mcp_server"]
     assert mcp["enabled"] is True
+    assert mcp["environment"] == {"ORCH_KB_SOURCES": "[]", "ORCH_KB_ROOT": str(tmp_path)}
 
 
 async def test_no_servers_no_mcp_key(monkeypatch, tmp_path):
@@ -42,4 +43,4 @@ async def test_no_servers_no_mcp_key(monkeypatch, tmp_path):
     adapter = OpenCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
     await _drive(adapter, tmp_path, [])
     cfg = json.loads(Path((tmp_path / "cfgpath.txt").read_text().strip()).read_text())
-    assert "mcp" not in cfg or cfg["mcp"] == {}
+    assert "mcp" not in cfg

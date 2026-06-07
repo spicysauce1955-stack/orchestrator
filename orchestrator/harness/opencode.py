@@ -143,6 +143,8 @@ class OpenCodeCLIAdapter:
         handle = uuid.uuid4().hex
         cfg = build_permission_config(caps)
         if mcp_servers:
+            # command is a single binary; args are kept separate and spliced into
+            # OpenCode's list form. (McpServer.command must not embed spaces.)
             cfg["mcp"] = {
                 s.name: {
                     "type": "local",
