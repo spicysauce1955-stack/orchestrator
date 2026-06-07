@@ -20,6 +20,7 @@ from orchestrator.config.loader import Workspace
 from orchestrator.config.schemas import Pipeline, Step, StepType
 from orchestrator.eval.verdict import Verdict
 from orchestrator.harness.adapter import HarnessAdapter
+from orchestrator.harness.registry import HarnessRegistry
 from orchestrator.observability.spans import SPAN_RUN, get_tracer
 from orchestrator.runtime.executors import (
     run_agent_step,
@@ -36,13 +37,17 @@ class DeterministicScheduler:
     def __init__(
         self,
         workspace: Workspace,
-        adapter: HarnessAdapter,
+        adapter: HarnessAdapter | HarnessRegistry,
         repo: Path,
         *,
         checkpoint_db: Path | None = None,
     ) -> None:
         self.workspace = workspace
-        self.adapter = adapter
+        # Accept a bare adapter (pre-M6a call style) or a registry; normalize to
+        # a registry so per-role.harness resolution is uniform.
+        self.registry = (
+            adapter if isinstance(adapter, HarnessRegistry) else HarnessRegistry.single(adapter)
+        )
         self.repo = Path(repo)
         self.checkpoint_db = (
             Path(checkpoint_db)
@@ -58,17 +63,20 @@ class DeterministicScheduler:
         async def node(state: GraphState) -> dict:
             ctx = state["ctx"]
             if step.type == StepType.task:
+                adapter = self.registry.default_adapter()
                 if step.merge_strategy is not None:
                     await run_merge_step(
-                        self.workspace, pipeline, step, ctx, repo=self.repo, adapter=self.adapter
+                        self.workspace, pipeline, step, ctx, repo=self.repo, adapter=adapter
                     )
                 else:
                     await run_task_step(
-                        self.workspace, pipeline, step, ctx, repo=self.repo, adapter=self.adapter
+                        self.workspace, pipeline, step, ctx, repo=self.repo, adapter=adapter
                     )
             elif step.type == StepType.agent:
+                harness = self.workspace.roles[step.role].harness
+                adapter = self.registry.adapter_for(harness)
                 await run_agent_step(
-                    self.workspace, pipeline, step, ctx, repo=self.repo, adapter=self.adapter
+                    self.workspace, pipeline, step, ctx, repo=self.repo, adapter=adapter
                 )
             else:  # gate
                 run_gate_step(step, ctx)

@@ -8,7 +8,7 @@ EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "feature-pipeline" 
 
 def test_example_workspace_loads():
     ws = load_workspace(EXAMPLE)
-    assert set(ws.roles) == {"implementer", "reviewer", "planner", "auditor"}
+    assert set(ws.roles) == {"implementer", "reviewer", "planner", "auditor", "opencoder"}
     assert "test-runner" in ws.skills
     assert ws.core_knowledge.inject  # non-empty
     assert "feature" in ws.pipelines
