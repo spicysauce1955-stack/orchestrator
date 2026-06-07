@@ -1,0 +1,5 @@
+{"type":"step_start","sessionID":"oc-impl-1","timestamp":1}
+{"type":"text","text":"Implementing. "}
+{"type":"tool_use","tool":"edit","id":"t1","input":{"path":"feature.py"}}
+{"type":"text","text":"Implemented the feature."}
+{"type":"step_finish","cost":0.006,"tokens":150}
