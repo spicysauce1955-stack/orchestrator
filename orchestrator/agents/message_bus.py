@@ -10,6 +10,7 @@ are driven by the scheduler; this records and traces the coordination.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from orchestrator.observability.spans import SPAN_MESSAGE, get_tracer
 
@@ -18,7 +19,7 @@ from orchestrator.observability.spans import SPAN_MESSAGE, get_tracer
 class Message:
     frm: str
     to: str
-    kind: str  # "classify" | "verdict" | "question" | "answer"
+    kind: Literal["classify", "verdict", "question", "answer"]
     body: str
 
 
@@ -32,5 +33,6 @@ class MessageBus:
             span.set_attribute("msg.from", frm)
             span.set_attribute("msg.to", to)
             span.set_attribute("msg.kind", kind)
+            span.set_attribute("msg.body", body)
         self.log.append(msg)
         return msg

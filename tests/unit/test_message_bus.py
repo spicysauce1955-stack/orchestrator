@@ -27,6 +27,7 @@ def test_send_emits_one_message_span_with_attributes():
     assert attrs["msg.from"] == "implement"
     assert attrs["msg.to"] == "orchestrator"
     assert attrs["msg.kind"] == "question"
+    assert attrs["msg.body"] == "which db?"
 
 
 def test_log_preserves_order():
