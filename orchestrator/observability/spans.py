@@ -16,6 +16,7 @@ SPAN_STEP = "step"
 SPAN_SESSION = "harness.session"
 SPAN_TOOL_CALL = "tool_call"
 SPAN_FILE_EDIT = "file_edit"
+SPAN_MESSAGE = "message"
 
 _TRACER_NAME = "orchestrator"
 
