@@ -13,7 +13,7 @@ from orchestrator.compile.compiler import compile_pipeline
 from orchestrator.config.loader import ConfigError, load_workspace
 from orchestrator.config.schemas import Mode, StepType
 from orchestrator.harness.registry import HarnessRegistry
-from orchestrator.observability.query import run_status
+from orchestrator.observability.query import run_messages, run_metrics, run_status
 from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tracer
 from orchestrator.observability.store import SqliteSpanExporter
 from orchestrator.runtime.controller import make_controller
@@ -79,11 +79,6 @@ def compile(
     for edge in result.ir.edges:
         arrow = "-?->" if edge.conditional else "-->"
         typer.echo(f"  {edge.source} {arrow} {edge.target}")
-
-
-def _not_implemented(name: str) -> None:
-    typer.echo(f"`orch {name}` is not implemented until a later milestone.")
-    raise typer.Exit(2)
 
 
 @app.command()
@@ -202,6 +197,37 @@ def status(
         mark = "ERROR" if s.is_error else "ok"
         role = f" [{s.role}]" if s.role else ""
         typer.echo(f"  {mark:5} {s.step_id}{role} ({s.kind})")
+
+
+@app.command()
+def metrics(
+    run_id: str = typer.Argument(...),
+    repo: Path = typer.Option(Path("."), "--repo"),
+) -> None:
+    """Show a run's cost/token/duration rollup from the span store (spec §9)."""
+    view = run_metrics(_span_db(repo), run_id)
+    if view is None:
+        typer.echo(f"error: no run '{run_id}' found in the span store.")
+        raise typer.Exit(1)
+    for m in view.steps:
+        typer.echo(
+            f"  {m.step_id}: ${m.cost_usd:.4f} ({m.tokens} tokens, {m.duration_ms:.0f} ms)"
+        )
+    typer.echo(f"total: ${view.total_cost_usd:.4f} ({view.total_tokens} tokens)")
+
+
+@app.command()
+def memory(
+    run_id: str = typer.Argument(...),
+    repo: Path = typer.Option(Path("."), "--repo"),
+) -> None:
+    """Show a run's coordination board (message bus log) from the span store."""
+    msgs = run_messages(_span_db(repo), run_id)
+    if not msgs:
+        typer.echo(f"run '{run_id}': no messages recorded.")
+        return
+    for m in msgs:
+        typer.echo(f"  {m.frm} → {m.to} [{m.kind}]: {m.body}")
 
 
 @app.command()
