@@ -142,6 +142,16 @@ class OpenCodeCLIAdapter:
     ) -> SessionId:
         handle = uuid.uuid4().hex
         cfg = build_permission_config(caps)
+        if mcp_servers:
+            cfg["mcp"] = {
+                s.name: {
+                    "type": "local",
+                    "command": [s.command, *s.args],
+                    "environment": dict(s.env),
+                    "enabled": True,
+                }
+                for s in mcp_servers
+            }
         fd, path = tempfile.mkstemp(prefix="orch-oc-", suffix=".json")
         with os.fdopen(fd, "w") as fh:
             json.dump(cfg, fh)
