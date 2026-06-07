@@ -40,13 +40,12 @@ def test_run_writes_spans_readable_by_status(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
 
-    # Extract the run_id printed by the CLI (8-char hex in "run <id>:" line).
+    # Extract the run_id printed by the CLI: the token right after "run " on
+    # a line like `run <id>: pipeline '...' — ...`.
     run_id = next(
-        tok
-        for line in result.output.splitlines()
+        line.split()[1].rstrip(":")
+        for line in result.stdout.splitlines()
         if line.startswith("run ")
-        for tok in line.replace(":", " ").split()
-        if len(tok) == 8 and tok.isalnum()
     )
 
     # The span store must exist and be readable.
@@ -60,6 +59,7 @@ def test_run_writes_spans_readable_by_status(tmp_path, monkeypatch):
     # triage has three steps: classify (task), plan (agent), implement (agent)
     step_ids = {s.step_id for s in view.steps}
     assert step_ids, "no steps recorded in the span store"
-    # At minimum the agent steps must have been recorded.
+    # All three triage steps must have been recorded (classify is a task step).
+    assert "classify" in step_ids
     assert "plan" in step_ids
     assert "implement" in step_ids

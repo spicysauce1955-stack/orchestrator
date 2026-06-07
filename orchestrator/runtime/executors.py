@@ -196,6 +196,7 @@ async def run_agent_step(
             step_span.set_attribute("step.id", step.id)
             step_span.set_attribute("step.role", step.role)
             step_span.set_attribute("step.harness", role.harness.value)
+            step_span.set_attribute("step.type", "agent")
 
             base_prompt = _render_prompt(step, step.role, ctx)
             # One-shot: consumed regardless of outcome. The on_reject loop-back

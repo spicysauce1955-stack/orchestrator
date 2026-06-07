@@ -59,7 +59,10 @@ def run_status(db: Path, run_id: str) -> StatusView | None:
         trace = _trace_for_run(conn, run_id)
         if trace is None:
             return None
-        run_row = _spans(conn, trace, "run")[0]
+        run_rows = _spans(conn, trace, "run")
+        if not run_rows:
+            return None
+        run_row = run_rows[0]
         pipeline = json.loads(run_row["attrs"]).get("pipeline", "")
         steps: list[StepView] = []
         any_error = False
