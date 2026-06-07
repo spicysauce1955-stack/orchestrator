@@ -80,3 +80,54 @@ def run_status(db: Path, run_id: str) -> StatusView | None:
         status="error" if any_error else "completed",
         steps=steps,
     )
+
+
+@dataclass
+class StepMetric:
+    step_id: str
+    cost_usd: float
+    tokens: int
+    duration_ms: float
+
+
+@dataclass
+class MetricsView:
+    run_id: str
+    steps: list[StepMetric]
+    total_cost_usd: float
+    total_tokens: int
+
+
+def run_metrics(db: Path, run_id: str) -> MetricsView | None:
+    with contextlib.closing(_open(db)) as conn:
+        trace = _trace_for_run(conn, run_id)
+        if trace is None:
+            return None
+        # session spans carry cost; group them under their parent step span.
+        cost_by_parent: dict[str, tuple[float, int]] = {}
+        for row in _spans(conn, trace, "harness.session"):
+            attrs = json.loads(row["attrs"])
+            usd, tok = cost_by_parent.get(row["parent_id"], (0.0, 0))
+            cost_by_parent[row["parent_id"]] = (
+                usd + float(attrs.get("cost.usd", 0.0)),
+                tok + int(attrs.get("cost.tokens", 0)),
+            )
+        steps: list[StepMetric] = []
+        total_usd = 0.0
+        total_tok = 0
+        for row in _spans(conn, trace, "step"):
+            attrs = json.loads(row["attrs"])
+            usd, tok = cost_by_parent.get(row["span_id"], (0.0, 0))
+            total_usd += usd
+            total_tok += tok
+            steps.append(
+                StepMetric(
+                    step_id=str(attrs.get("step.id", "")),
+                    cost_usd=usd,
+                    tokens=tok,
+                    duration_ms=(int(row["end_ns"]) - int(row["start_ns"])) / 1e6,
+                )
+            )
+    return MetricsView(
+        run_id=run_id, steps=steps, total_cost_usd=total_usd, total_tokens=total_tok
+    )

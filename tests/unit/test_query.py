@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from orchestrator.observability.query import run_status
+from orchestrator.observability.query import run_metrics, run_status
 from orchestrator.observability.spans import (
     SPAN_RUN,
     SPAN_SESSION,
@@ -64,3 +64,19 @@ def test_all_spans_of_a_run_share_one_trace(tmp_path: Path) -> None:
     conn.row_factory = sqlite3.Row
     traces = {r["trace_id"] for r in conn.execute("SELECT trace_id FROM spans")}
     assert len(traces) == 1
+
+
+def test_run_metrics_rolls_up_cost_per_step_and_total(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    _seed(db)  # implement step has one session: $0.5 / 1000 tokens
+
+    view = run_metrics(db, "r1")
+
+    assert view is not None
+    by_step = {m.step_id: m for m in view.steps}
+    assert by_step["implement"].cost_usd == 0.5
+    assert by_step["implement"].tokens == 1000
+    assert by_step["plan"].cost_usd == 0.0  # no session under plan
+    assert view.total_cost_usd == 0.5
+    assert view.total_tokens == 1000
+    assert by_step["implement"].duration_ms >= 0.0
