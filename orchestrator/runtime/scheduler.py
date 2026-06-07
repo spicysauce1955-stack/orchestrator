@@ -14,6 +14,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 
+from orchestrator.agents.message_bus import MessageBus
+from orchestrator.agents.orchestrator_agent import OrchestratorAgent
 from orchestrator.compile.compiler import wire_edges
 from orchestrator.compile.ir import build_ir
 from orchestrator.config.loader import Workspace
@@ -26,7 +28,6 @@ from orchestrator.runtime.executors import (
     run_agent_step,
     run_gate_step,
     run_merge_step,
-    run_task_step,
 )
 from orchestrator.runtime.state import CHECKPOINT_SERDE_MODULES, GraphState, RunContext, RunStatus
 
@@ -41,6 +42,8 @@ class DeterministicScheduler:
         repo: Path,
         *,
         checkpoint_db: Path | None = None,
+        bus: MessageBus | None = None,
+        agent: OrchestratorAgent | None = None,
     ) -> None:
         self.workspace = workspace
         # Accept a bare adapter (pre-M6a call style) or a registry; normalize to
@@ -58,25 +61,28 @@ class DeterministicScheduler:
         # resume() can find them within the same process. Cross-process resume requires
         # the pipeline to be defined in the workspace (workspace.pipelines[pipeline_name]).
         self._pipeline_cache: dict[str, Pipeline] = {}
+        self.bus = bus or MessageBus()
+        self.agent = agent or OrchestratorAgent(
+            workspace=workspace, registry=self.registry, bus=self.bus, repo=self.repo
+        )
 
     def _make_node(self, pipeline: Pipeline, step: Step):
         async def node(state: GraphState) -> dict:
             ctx = state["ctx"]
             if step.type == StepType.task:
-                adapter = self.registry.default_adapter()
                 if step.merge_strategy is not None:
+                    adapter = self.registry.default_adapter()
                     await run_merge_step(
                         self.workspace, pipeline, step, ctx, repo=self.repo, adapter=adapter
                     )
                 else:
-                    await run_task_step(
-                        self.workspace, pipeline, step, ctx, repo=self.repo, adapter=adapter
-                    )
+                    await self.agent.run_task(pipeline, step, ctx)
             elif step.type == StepType.agent:
                 harness = self.workspace.roles[step.role].harness
                 adapter = self.registry.adapter_for(harness)
                 await run_agent_step(
-                    self.workspace, pipeline, step, ctx, repo=self.repo, adapter=adapter
+                    self.workspace, pipeline, step, ctx,
+                    repo=self.repo, adapter=adapter, agent=self.agent,
                 )
             else:  # gate
                 run_gate_step(step, ctx)
@@ -105,6 +111,9 @@ class DeterministicScheduler:
                     and reject_target is not None
                     and ctx.attempts.get(reject_target, 0) <= by_id[reject_target].max_retries
                 ):
+                    self.agent.relay_verdict(
+                        art.output if art else "reject", to_step=reject_target, ctx=ctx
+                    )
                     return reject_target
                 return forward[0] if forward else END
 
