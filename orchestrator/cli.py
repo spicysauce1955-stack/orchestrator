@@ -13,7 +13,9 @@ from orchestrator.compile.compiler import compile_pipeline
 from orchestrator.config.loader import ConfigError, load_workspace
 from orchestrator.config.schemas import Mode, StepType
 from orchestrator.harness.registry import HarnessRegistry
+from orchestrator.observability.query import run_status
 from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tracer
+from orchestrator.observability.store import SqliteSpanExporter
 from orchestrator.runtime.controller import make_controller
 from orchestrator.runtime.executors import run_agent_step
 from orchestrator.runtime.state import RunContext, RunStatus
@@ -25,6 +27,11 @@ app = typer.Typer(help="Declarative multi-vendor coding-agent orchestrator.")
 def _checkpoint_db(repo: Path) -> Path:
     env = os.environ.get("ORCH_CHECKPOINT_DB")
     return Path(env) if env else Path(repo) / ".orch" / "checkpoints.sqlite"
+
+
+def _span_db(repo: Path) -> Path:
+    env = os.environ.get("ORCH_SPAN_DB")
+    return Path(env) if env else Path(repo) / ".orch" / "spans.sqlite"
 
 
 def _print_artifact(artifact, run_id, *, brief: bool = False) -> None:
@@ -106,7 +113,7 @@ def run(
         typer.echo(f"error: unknown pipeline '{pipeline}'; available: {available}")
         raise typer.Exit(1)
 
-    configure_tracing(exporter=None)
+    configure_tracing(exporter=SqliteSpanExporter(_span_db(repo)))
     registry = HarnessRegistry.from_env()  # adapters honor $ORCH_*_BIN
     run_id = uuid.uuid4().hex[:8]
 
@@ -181,9 +188,20 @@ def run(
 
 
 @app.command()
-def status(run_id: str = typer.Argument(...)) -> None:
-    """Show a run's status (later milestone)."""
-    _not_implemented("status")
+def status(
+    run_id: str = typer.Argument(...),
+    repo: Path = typer.Option(Path("."), "--repo", help="Repo whose .orch/ holds the span store."),
+) -> None:
+    """Show a run's step-by-step status from the span store (spec §9)."""
+    view = run_status(_span_db(repo), run_id)
+    if view is None:
+        typer.echo(f"error: no run '{run_id}' found in the span store.")
+        raise typer.Exit(1)
+    typer.echo(f"run {view.run_id}: pipeline '{view.pipeline}' — {view.status}")
+    for s in view.steps:
+        mark = "ERROR" if s.is_error else "ok"
+        role = f" [{s.role}]" if s.role else ""
+        typer.echo(f"  {mark:5} {s.step_id}{role} ({s.kind})")
 
 
 @app.command()
@@ -204,7 +222,7 @@ def resume(
     except ConfigError as exc:
         typer.echo(f"config error: {exc}")
         raise typer.Exit(1) from exc
-    configure_tracing(exporter=None)
+    configure_tracing(exporter=SqliteSpanExporter(_span_db(repo)))
     registry = HarnessRegistry.from_env()
     controller = make_controller(
         Mode.declarative, workspace, registry, repo, checkpoint_db=_checkpoint_db(repo)
