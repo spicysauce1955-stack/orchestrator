@@ -125,6 +125,39 @@ async def _drive_harness(
     return agg
 
 
+async def _drive_with_questions(
+    adapter: HarnessAdapter,
+    caps: ResolvedCaps,
+    cwd: Path,
+    prompt: str,
+    step: Step,
+    tracer,
+    mcp_servers: Sequence[McpServer],
+    agent,
+) -> _Aggregate:
+    """Drive the harness, handling up to step.max_questions worker→orch Q&A rounds.
+
+    If the harness result carries a structured `question` (and an agent is
+    available and the budget remains), the orchestrator answers and the SAME
+    worktree is re-prompted with the answer appended. Returns the final drive.
+    """
+    q_prompt = prompt
+    for q_round in range(step.max_questions + 1):
+        agg = await _drive_harness(
+            adapter, caps, cwd, q_prompt, step.output_schema, tracer, mcp_servers=mcp_servers
+        )
+        output_data, _ = parse_output(agg.result_text, step.output_schema)
+        question = (output_data or {}).get("question") if not agg.is_error else None
+        if not question or agent is None or q_round >= step.max_questions:
+            return agg
+        answer = await agent.answer(question, from_step=step.id)
+        q_prompt = (
+            f"{prompt}\n\n[You asked]: {question}\n"
+            f"[Orchestrator answer]: {answer}\nNow proceed."
+        )
+    return agg  # unreachable (the q_round bound always breaks), kept for the type checker
+
+
 async def run_agent_step(
     workspace: Workspace,
     pipeline: Pipeline,
@@ -133,6 +166,7 @@ async def run_agent_step(
     *,
     repo: Path,
     adapter: HarnessAdapter,
+    agent=None,  # duck-typed OrchestratorAgent; None disables worker Q&A (back-compat)
 ) -> Artifact:
     """Run one agent step end-to-end: worktree → harness drive → success_criteria/retry."""
     if step.role is None:
@@ -164,6 +198,15 @@ async def run_agent_step(
             step_span.set_attribute("step.harness", role.harness.value)
 
             base_prompt = _render_prompt(step, step.role, ctx)
+            # One-shot: consumed regardless of outcome. The on_reject loop-back
+            # regenerates feedback each cycle (orchestrator.relay_verdict), so
+            # the next attempt is re-fed by the router, not by a stale entry.
+            relayed = ctx.relayed_feedback.pop(step.id, None)
+            if relayed:
+                base_prompt = (
+                    f"{base_prompt}\n\n[Reviewer feedback relayed by the orchestrator]:\n"
+                    f"{relayed}\nAddress it in this attempt."
+                )
             feedback: str | None = None
             for attempt in range(step.max_retries + 1):
                 if feedback is None:
@@ -173,9 +216,8 @@ async def run_agent_step(
                         f"{base_prompt}\n\nThe previous attempt failed"
                         f" `success_criteria`:\n{feedback}\nFix the issues and try again."
                     )
-                agg = await _drive_harness(
-                    adapter, caps, worktree.path, prompt, step.output_schema, tracer,
-                    mcp_servers=mcp_servers,
+                agg = await _drive_with_questions(
+                    adapter, caps, worktree.path, prompt, step, tracer, mcp_servers, agent
                 )
                 total_cost += agg.cost_usd
                 total_tokens += agg.tokens

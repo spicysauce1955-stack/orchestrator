@@ -44,6 +44,7 @@ class RunContext:
     pipeline_name: str = ""
     status: RunStatus = RunStatus.RUNNING
     gate_decisions: dict[str, str] = field(default_factory=dict)
+    relayed_feedback: dict[str, str] = field(default_factory=dict)
     pending_interrupt: dict | None = None
 
     def record(self, artifact: Artifact) -> None:

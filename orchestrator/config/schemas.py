@@ -123,6 +123,7 @@ class Step(_Strict):
     isolation: Isolation | None = None
     success_criteria: str | None = None
     max_retries: int = 0
+    max_questions: int = 0
     on_reject: str | None = None
     require_approval: bool = False
     merge_strategy: str | None = None

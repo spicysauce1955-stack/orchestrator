@@ -63,6 +63,10 @@ def main() -> int:
             keyword = "classify"
         elif "review" in pl:
             keyword = "review"
+        elif "question" in pl:
+            # Routes on the WORKER's prompt. The orchestrator's answer prompt is
+            # worded to avoid this keyword so it falls through to `default`.
+            keyword = "question"
         else:
             keyword = "default"
         script = Path(script_dir) / f"{keyword}.ndjson"

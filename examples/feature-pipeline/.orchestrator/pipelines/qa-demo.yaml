@@ -1,0 +1,15 @@
+# M6c demo: the implementer may ask the orchestrator one question before proceeding.
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: classify
+    type: task
+    prompt: 'Classify {{task}} as one of: bugfix | feature | refactor. Reply JSON {"kind":"<one>"}.'
+    output_schema: { kind: "enum[bugfix,feature,refactor]" }
+  - id: implement
+    role: implementer
+    needs: [classify]
+    prompt: "Implement {{task}}. If blocked, reply JSON {\"question\": \"<your question>\"}."
+    output_schema: { question: "string" }
+    max_questions: 1
+    success_criteria: "true"
