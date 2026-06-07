@@ -117,7 +117,11 @@ def handle_request(req: dict, state: ServerState) -> dict | None:
 
 
 def state_from_env() -> ServerState:
-    sources = json.loads(os.environ.get("ORCH_KB_SOURCES", "[]"))
+    raw_sources = os.environ.get("ORCH_KB_SOURCES", "[]")
+    try:
+        sources = json.loads(raw_sources)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"ORCH_KB_SOURCES is not valid JSON: {e}") from e
     root = Path(os.environ.get("ORCH_KB_ROOT", "."))
     wt = os.environ.get("ORCH_KB_WRITE_TARGET")
     return ServerState(sources=sources, root=root, write_target=Path(wt) if wt else None)

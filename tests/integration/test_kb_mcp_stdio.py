@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +12,8 @@ def _rpc(proc, obj):
 
 def _read(proc):
     line = proc.stdout.readline()
-    return json.loads(line) if line.strip() else None
+    assert line.strip(), "subprocess produced no output (did it crash?)"
+    return json.loads(line)
 
 
 def _spawn(tmp_path, env_extra):
@@ -21,7 +23,6 @@ def _spawn(tmp_path, env_extra):
         "ORCH_KB_ROOT": str(tmp_path),
         **env_extra,
     }
-    import os
     full_env = {**os.environ, **env}
     return subprocess.Popen(
         [sys.executable, "-m", "orchestrator.knowledge.mcp_server"],
