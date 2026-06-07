@@ -164,6 +164,9 @@ async def run_agent_step(
             step_span.set_attribute("step.harness", role.harness.value)
 
             base_prompt = _render_prompt(step, step.role, ctx)
+            # One-shot: consumed regardless of outcome. The on_reject loop-back
+            # regenerates feedback each cycle (orchestrator.relay_verdict), so
+            # the next attempt is re-fed by the router, not by a stale entry.
             relayed = ctx.relayed_feedback.pop(step.id, None)
             if relayed:
                 base_prompt = (
