@@ -8,6 +8,7 @@ per-step attempt counter + /{attempt} branch suffix (cycle re-entry safe).
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from langgraph.types import interrupt
@@ -16,9 +17,10 @@ from orchestrator.config.loader import Workspace
 from orchestrator.config.schemas import Pipeline, Step, StepType
 from orchestrator.eval.criteria import count_tests, run_success_criteria, test_count_regressed
 from orchestrator.eval.verdict import parse_output
-from orchestrator.harness.adapter import HarnessAdapter
+from orchestrator.harness.adapter import HarnessAdapter, McpServer
 from orchestrator.harness.events import Cost, Done, FileEdit, MessageChunk, ToolCall
 from orchestrator.isolation.worktree import create_worktree, remove_worktree
+from orchestrator.knowledge.provider import build_knowledge_mcp, inject_core
 from orchestrator.observability.spans import (
     SPAN_FILE_EDIT,
     SPAN_SESSION,
@@ -45,7 +47,7 @@ def _render_prompt(step: Step, role_name: str | None, ctx: RunContext) -> str:
     return render_template(step.prompt, ctx.inputs, ctx.artifacts)
 
 
-def _capture_diff(cwd: Path) -> str:
+def _capture_diff(cwd: Path, exclude: tuple[str, ...] = ()) -> str:
     """Diff of all changes in the worktree, including newly created files.
 
     `git add -A -N` (intent-to-add) registers untracked files so `git diff` emits a
@@ -53,12 +55,18 @@ def _capture_diff(cwd: Path) -> str:
     re-applied by the merge step. `git reset HEAD` is called afterwards to remove
     the intent-to-add entries from the index, leaving the working tree and index
     otherwise untouched.
+
+    `exclude` is an optional tuple of relative paths to omit from the diff (e.g.
+    injected core knowledge files that are read-only and must not be merged back).
     """
     subprocess.run(
         ["git", "add", "-A", "-N"], cwd=cwd, capture_output=True, text=True
     )
+    pathspec: list[str] = []
+    if exclude:
+        pathspec = ["--", ".", *(f":(exclude){p}" for p in exclude)]
     diff = subprocess.run(
-        ["git", "diff"], cwd=cwd, capture_output=True, text=True
+        ["git", "diff", *pathspec], cwd=cwd, capture_output=True, text=True
     ).stdout
     subprocess.run(["git", "reset", "HEAD"], cwd=cwd, capture_output=True, text=True)
     return diff
@@ -86,10 +94,11 @@ async def _drive_harness(
     prompt: str,
     output_schema: dict | None,
     tracer,
+    mcp_servers: Sequence[McpServer] = (),
 ) -> _Aggregate:
     """Start a session, stream events into session/tool/file spans, aggregate."""
     agg = _Aggregate()
-    session = await adapter.start_session(cwd=cwd, caps=caps, mcp_servers=[])
+    session = await adapter.start_session(cwd=cwd, caps=caps, mcp_servers=list(mcp_servers))
     with tracer.start_as_current_span(SPAN_SESSION) as sess_span:
         stream = await adapter.prompt(session, prompt, output_schema=output_schema)
         async for ev in stream:
@@ -141,6 +150,12 @@ async def run_agent_step(
     is_error = False
 
     worktree = create_worktree(Path(repo), branch=branch)
+    # Knowledge provider (spec §8): inject core files into the agent's cwd (the
+    # worktree) and build the gated MCP server from this role's resolved caps.
+    # Write target (if any) is rooted at the REAL repo, not the discarded worktree,
+    # so durable lessons persist past the run (see build_knowledge_mcp).
+    injected = tuple(inject_core(workspace.core_knowledge, Path(repo), worktree.path))
+    mcp_servers = build_knowledge_mcp(workspace, caps, Path(repo))
     baseline_tests = count_tests(worktree.path)
     try:
         with tracer.start_as_current_span(SPAN_STEP) as step_span:
@@ -159,7 +174,8 @@ async def run_agent_step(
                         f" `success_criteria`:\n{feedback}\nFix the issues and try again."
                     )
                 agg = await _drive_harness(
-                    adapter, caps, worktree.path, prompt, step.output_schema, tracer
+                    adapter, caps, worktree.path, prompt, step.output_schema, tracer,
+                    mcp_servers=mcp_servers,
                 )
                 total_cost += agg.cost_usd
                 total_tokens += agg.tokens
@@ -179,7 +195,7 @@ async def run_agent_step(
                     break
                 feedback = crit_out
 
-            diff = _capture_diff(worktree.path)
+            diff = _capture_diff(worktree.path, exclude=injected)
             # Test-count gate (spec §6): can't go green by deleting tests.
             if step.success_criteria:
                 after_tests = count_tests(worktree.path)

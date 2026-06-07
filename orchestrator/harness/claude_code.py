@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -95,6 +97,21 @@ class _Session:
     caps: ResolvedCaps
     mcp_servers: list[McpServer]
     harness_session_id: str | None = None
+    mcp_config_path: str | None = None
+
+
+def _write_mcp_config(servers: list[McpServer]) -> str:
+    """Write a Claude `--mcp-config` JSON to a temp file OUTSIDE the worktree."""
+    cfg = {
+        "mcpServers": {
+            s.name: {"command": s.command, "args": list(s.args), "env": dict(s.env)}
+            for s in servers
+        }
+    }
+    fd, path = tempfile.mkstemp(prefix="orch-mcp-", suffix=".json")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(cfg, fh)
+    return path
 
 
 class ClaudeCodeCLIAdapter:
@@ -106,8 +123,6 @@ class ClaudeCodeCLIAdapter:
 
     def __init__(self, binary: list[str] | None = None) -> None:
         if binary is None:
-            import os
-
             env_bin = os.environ.get("ORCH_CLAUDE_BIN")
             binary = env_bin.split() if env_bin else ["claude"]
         self._binary = binary
@@ -121,7 +136,14 @@ class ClaudeCodeCLIAdapter:
         mcp_servers: list[McpServer],
     ) -> SessionId:
         handle = uuid.uuid4().hex
-        self._sessions[handle] = _Session(cwd=Path(cwd), caps=caps, mcp_servers=list(mcp_servers))
+        sess = _Session(cwd=Path(cwd), caps=caps, mcp_servers=list(mcp_servers))
+        if sess.mcp_servers:
+            # Written once here (not per-prompt) so repeated prompts/resume don't
+            # orphan temp files. Lives in $TMPDIR, outside the worktree — never in
+            # the agent diff. Cleaned up in cancel(); a leak on a non-cancelled
+            # path is acceptable for MVP (same as the OpenCode adapter).
+            sess.mcp_config_path = _write_mcp_config(sess.mcp_servers)
+        self._sessions[handle] = sess
         return handle
 
     async def prompt(
@@ -132,15 +154,11 @@ class ClaudeCodeCLIAdapter:
         output_schema: dict | None = None,
     ) -> AsyncIterator[Event]:
         sess = self._sessions[session]
-        flags = self.translate(sess.caps, cwd=sess.cwd)
-        cmd = [
-            *self._binary,
-            "-p",
-            text,
-            "--output-format",
-            "stream-json",
-            *flags,
-        ]
+        extra_tools = tuple(f"mcp__{s.name}" for s in sess.mcp_servers)
+        flags = self.translate(sess.caps, cwd=sess.cwd, extra_allowed_tools=extra_tools)
+        mcp_flags = ["--mcp-config", sess.mcp_config_path] if sess.mcp_config_path else []
+        cmd = [*self._binary, "-p", text, "--output-format", "stream-json",
+               *flags, *mcp_flags]
         return self._stream(session, cmd)
 
     async def _stream(self, session: SessionId, cmd: list[str]) -> AsyncIterator[Event]:
@@ -182,16 +200,28 @@ class ClaudeCodeCLIAdapter:
         return session
 
     async def cancel(self, session: SessionId) -> None:
-        self._sessions.pop(session, None)
+        sess = self._sessions.pop(session, None)
+        if sess and sess.mcp_config_path:
+            try:
+                os.unlink(sess.mcp_config_path)
+            except OSError:
+                pass
 
-    def translate(self, caps: ResolvedCaps, *, cwd: Path | None = None) -> list[str]:
+    def translate(
+        self,
+        caps: ResolvedCaps,
+        *,
+        cwd: Path | None = None,
+        extra_allowed_tools: tuple[str, ...] = (),
+    ) -> list[str]:
         """ResolvedCaps → Claude Code CLI flags (spec §4.1, §5)."""
         flags: list[str] = []
         if cwd is not None:
             flags += ["--add-dir", str(cwd)]
         flags += ["--permission-mode", caps.permission_mode]
-        if caps.allowed_tools:
-            flags += ["--allowedTools", ",".join(caps.allowed_tools)]
+        allowed = (*caps.allowed_tools, *extra_allowed_tools)
+        if allowed:
+            flags += ["--allowedTools", ",".join(allowed)]
         if caps.disallowed_tools:
             flags += ["--disallowedTools", ",".join(caps.disallowed_tools)]
         return flags

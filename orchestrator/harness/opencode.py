@@ -142,6 +142,18 @@ class OpenCodeCLIAdapter:
     ) -> SessionId:
         handle = uuid.uuid4().hex
         cfg = build_permission_config(caps)
+        if mcp_servers:
+            # command is a single binary; args are kept separate and spliced into
+            # OpenCode's list form. (McpServer.command must not embed spaces.)
+            cfg["mcp"] = {
+                s.name: {
+                    "type": "local",
+                    "command": [s.command, *s.args],
+                    "environment": dict(s.env),
+                    "enabled": True,
+                }
+                for s in mcp_servers
+            }
         fd, path = tempfile.mkstemp(prefix="orch-oc-", suffix=".json")
         with os.fdopen(fd, "w") as fh:
             json.dump(cfg, fh)
