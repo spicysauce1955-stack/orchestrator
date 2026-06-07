@@ -8,8 +8,19 @@ boundary; caps translate to an OpenCode permission config (best-effort).
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import tempfile
+import uuid
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from pathlib import Path
+
+from orchestrator.harness.adapter import McpServer, SessionId
 from orchestrator.harness.events import (
     Cost,
+    Done,
     Event,
     FileEdit,
     MessageChunk,
@@ -23,6 +34,15 @@ _EDIT_TOOLS = {"edit": "modify", "write": "create", "patch": "modify"}
 
 # Credential-ish paths excluded from reads (mirrors spec §4.1 fs credential exclusion).
 _READ_DENY = ["*.env", "*.env.*", "**/.ssh/**", "**/.aws/**"]
+
+# Convenience aliases for the `provider/model` string carried by a role.
+_MODEL_ALIASES = {"glm": "zhipu/glm-4.6"}
+
+
+def _alias_model(model: str | None) -> str | None:
+    if model is None:
+        return None
+    return _MODEL_ALIASES.get(model, model)
 
 
 def parse_opencode_line(obj: dict, tool_names: dict[str, str]) -> list[Event]:
@@ -91,3 +111,103 @@ def build_permission_config(caps: ResolvedCaps) -> dict:
             "read": read,
         }
     }
+
+
+@dataclass
+class _OCSession:
+    cwd: Path
+    caps: ResolvedCaps
+    mcp_servers: list[McpServer]
+    config_path: str | None = None
+    harness_session_id: str | None = None
+
+
+class OpenCodeCLIAdapter:
+    """Drives OpenCode via `opencode run --format json`.
+
+    `binary` default `["opencode"]`; honors $ORCH_OPENCODE_BIN. `model` is the
+    `provider/model` string (from the role); `glm` is aliased to zhipu/glm-4.6.
+    """
+
+    def __init__(self, binary: list[str] | None = None, *, model: str | None = None) -> None:
+        if binary is None:
+            env_bin = os.environ.get("ORCH_OPENCODE_BIN")
+            binary = env_bin.split() if env_bin else ["opencode"]
+        self._binary = binary
+        self._model = _alias_model(model)
+        self._sessions: dict[SessionId, _OCSession] = {}
+
+    async def start_session(
+        self, *, cwd: Path, caps: ResolvedCaps, mcp_servers: list[McpServer]
+    ) -> SessionId:
+        handle = uuid.uuid4().hex
+        cfg = build_permission_config(caps)
+        fd, path = tempfile.mkstemp(prefix="orch-oc-", suffix=".json")
+        with os.fdopen(fd, "w") as fh:
+            json.dump(cfg, fh)
+        self._sessions[handle] = _OCSession(
+            cwd=Path(cwd), caps=caps, mcp_servers=list(mcp_servers), config_path=path
+        )
+        return handle
+
+    async def prompt(
+        self, session: SessionId, text: str, *, output_schema: dict | None = None
+    ) -> AsyncIterator[Event]:
+        sess = self._sessions[session]
+        cmd = [
+            *self._binary,
+            "run",
+            "--format",
+            "json",
+            "--print-logs",
+            "--dir",
+            str(sess.cwd),
+        ]
+        if self._model:
+            cmd += ["-m", self._model]
+        cmd.append(text)
+        return self._stream(session, cmd)
+
+    async def _stream(self, session: SessionId, cmd: list[str]) -> AsyncIterator[Event]:
+        sess = self._sessions[session]
+        env = dict(os.environ)
+        if sess.config_path:
+            env["OPENCODE_CONFIG"] = sess.config_path
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(sess.cwd),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        tool_names: dict[str, str] = {}
+        text_parts: list[str] = []
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            line = raw.decode().strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for ev in parse_opencode_line(obj, tool_names):
+                if isinstance(ev, SessionStarted):
+                    sess.harness_session_id = ev.session_id
+                if isinstance(ev, MessageChunk):
+                    text_parts.append(ev.text)
+                yield ev
+        returncode = await proc.wait()
+        # OpenCode has no single "result" event; synthesize Done at stream end.
+        yield Done(result="".join(text_parts), is_error=(returncode != 0))
+
+    async def resume(self, session: SessionId) -> SessionId:
+        return session
+
+    async def cancel(self, session: SessionId) -> None:
+        sess = self._sessions.pop(session, None)
+        if sess and sess.config_path:
+            try:
+                os.unlink(sess.config_path)
+            except OSError:
+                pass
