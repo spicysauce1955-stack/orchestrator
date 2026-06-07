@@ -8,6 +8,7 @@ per-step attempt counter + /{attempt} branch suffix (cycle re-entry safe).
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from langgraph.types import interrupt
@@ -16,7 +17,7 @@ from orchestrator.config.loader import Workspace
 from orchestrator.config.schemas import Pipeline, Step, StepType
 from orchestrator.eval.criteria import count_tests, run_success_criteria, test_count_regressed
 from orchestrator.eval.verdict import parse_output
-from orchestrator.harness.adapter import HarnessAdapter
+from orchestrator.harness.adapter import HarnessAdapter, McpServer
 from orchestrator.harness.events import Cost, Done, FileEdit, MessageChunk, ToolCall
 from orchestrator.isolation.worktree import create_worktree, remove_worktree
 from orchestrator.knowledge.provider import build_knowledge_mcp, inject_core
@@ -61,7 +62,9 @@ def _capture_diff(cwd: Path, exclude: tuple[str, ...] = ()) -> str:
     subprocess.run(
         ["git", "add", "-A", "-N"], cwd=cwd, capture_output=True, text=True
     )
-    pathspec = ["--", "."] + [f":(exclude){p}" for p in exclude] if exclude else []
+    pathspec: list[str] = []
+    if exclude:
+        pathspec = ["--", ".", *(f":(exclude){p}" for p in exclude)]
     diff = subprocess.run(
         ["git", "diff", *pathspec], cwd=cwd, capture_output=True, text=True
     ).stdout
@@ -91,7 +94,7 @@ async def _drive_harness(
     prompt: str,
     output_schema: dict | None,
     tracer,
-    mcp_servers=(),
+    mcp_servers: Sequence[McpServer] = (),
 ) -> _Aggregate:
     """Start a session, stream events into session/tool/file spans, aggregate."""
     agg = _Aggregate()

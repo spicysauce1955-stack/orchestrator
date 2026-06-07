@@ -26,6 +26,19 @@ def test_capture_diff_includes_new_file_content(tmp_path):
     assert "CHANGED" in diff
 
 
+def test_capture_diff_exclude_omits_path(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "AGENTS.md").write_text("rules\n")
+    (repo / "feature.py").write_text("print('x')\n")
+
+    full = _capture_diff(repo)
+    assert "AGENTS.md" in full and "feature.py" in full
+
+    excluded = _capture_diff(repo, exclude=("AGENTS.md",))
+    assert "AGENTS.md" not in excluded
+    assert "feature.py" in excluded
+
+
 def test_capture_diff_is_reapplyable(tmp_path):
     repo = _init_repo(tmp_path)
     (repo / "new.txt").write_text("brand new\n")
