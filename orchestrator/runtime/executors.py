@@ -99,29 +99,32 @@ async def _drive_harness(
     """Start a session, stream events into session/tool/file spans, aggregate."""
     agg = _Aggregate()
     session = await adapter.start_session(cwd=cwd, caps=caps, mcp_servers=list(mcp_servers))
-    with tracer.start_as_current_span(SPAN_SESSION) as sess_span:
-        stream = await adapter.prompt(session, prompt, output_schema=output_schema)
-        async for ev in stream:
-            if isinstance(ev, MessageChunk):
-                agg.text_parts.append(ev.text)
-            elif isinstance(ev, ToolCall):
-                with tracer.start_as_current_span(SPAN_TOOL_CALL) as tc:
-                    tc.set_attribute("tool.name", ev.name)
-                    tc.set_attribute("tool.status", ev.status)
-            elif isinstance(ev, FileEdit):
-                with tracer.start_as_current_span(SPAN_FILE_EDIT) as fe:
-                    fe.set_attribute("file.path", ev.path)
-                    fe.set_attribute("file.kind", ev.kind)
-            elif isinstance(ev, Cost):
-                agg.cost_usd += ev.usd
-                agg.tokens += ev.tokens
-                sess_span.set_attribute("cost.usd", ev.usd)
-                sess_span.set_attribute("cost.tokens", ev.tokens)
-            elif isinstance(ev, Done):
-                agg.result_text = ev.result
-                agg.is_error = ev.is_error
-                sess_span.set_attribute("done.is_error", ev.is_error)
-        sess_span.set_attribute("session.handle", session)
+    try:
+        with tracer.start_as_current_span(SPAN_SESSION) as sess_span:
+            stream = await adapter.prompt(session, prompt, output_schema=output_schema)
+            async for ev in stream:
+                if isinstance(ev, MessageChunk):
+                    agg.text_parts.append(ev.text)
+                elif isinstance(ev, ToolCall):
+                    with tracer.start_as_current_span(SPAN_TOOL_CALL) as tc:
+                        tc.set_attribute("tool.name", ev.name)
+                        tc.set_attribute("tool.status", ev.status)
+                elif isinstance(ev, FileEdit):
+                    with tracer.start_as_current_span(SPAN_FILE_EDIT) as fe:
+                        fe.set_attribute("file.path", ev.path)
+                        fe.set_attribute("file.kind", ev.kind)
+                elif isinstance(ev, Cost):
+                    agg.cost_usd += ev.usd
+                    agg.tokens += ev.tokens
+                    sess_span.set_attribute("cost.usd", ev.usd)
+                    sess_span.set_attribute("cost.tokens", ev.tokens)
+                elif isinstance(ev, Done):
+                    agg.result_text = ev.result
+                    agg.is_error = ev.is_error
+                    sess_span.set_attribute("done.is_error", ev.is_error)
+            sess_span.set_attribute("session.handle", session)
+    finally:
+        await adapter.cancel(session)
     return agg
 
 
@@ -196,6 +199,7 @@ async def run_agent_step(
             step_span.set_attribute("step.id", step.id)
             step_span.set_attribute("step.role", step.role)
             step_span.set_attribute("step.harness", role.harness.value)
+            step_span.set_attribute("step.type", "agent")
 
             base_prompt = _render_prompt(step, step.role, ctx)
             # One-shot: consumed regardless of outcome. The on_reject loop-back
