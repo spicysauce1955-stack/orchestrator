@@ -16,7 +16,11 @@ from orchestrator.config.schemas import CoreKnowledge
 
 
 def inject_core(core: CoreKnowledge | None, root: Path, dest: Path) -> list[str]:
-    """Copy each `inject` file from `root` into `dest`. Returns injected rel paths."""
+    """Copy each `inject` file from `root` into `dest`. Returns injected rel paths.
+
+    Files listed in `inject` that are absent from `root` are silently skipped
+    (soft validation — a misconfigured path shortens the result, never raises).
+    """
     if core is None:
         return []
     injected: list[str] = []
