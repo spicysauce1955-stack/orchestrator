@@ -38,7 +38,7 @@ async def test_mcp_config_passed_and_tools_allowed(monkeypatch, tmp_path):
     allowed = argv[argv.index("--allowedTools") + 1]
     assert "mcp__knowledge" in allowed
     # config lives OUTSIDE the worktree (no diff pollution)
-    assert str(tmp_path) not in cfg_path or "tmp" in cfg_path.lower()
+    assert not cfg_path.startswith(str(tmp_path))  # config lives outside the worktree
 
 
 async def test_no_servers_no_mcp_flag(monkeypatch, tmp_path):
@@ -48,3 +48,17 @@ async def test_no_servers_no_mcp_flag(monkeypatch, tmp_path):
     await _drive(adapter, tmp_path, [])
     argv = (tmp_path / "argv.txt").read_text().splitlines()
     assert "--mcp-config" not in argv
+
+
+async def test_cancel_removes_mcp_config(monkeypatch, tmp_path):
+    server = McpServer(name="knowledge", command=sys.executable,
+                       args=["-m", "orchestrator.knowledge.mcp_server"],
+                       env={"ORCH_KB_SOURCES": "[]", "ORCH_KB_ROOT": str(tmp_path)})
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    session = await adapter.start_session(
+        cwd=tmp_path, caps=ResolvedCaps.read_only(), mcp_servers=[server]
+    )
+    cfg_path = adapter._sessions[session].mcp_config_path
+    assert cfg_path and Path(cfg_path).exists()
+    await adapter.cancel(session)
+    assert not Path(cfg_path).exists()

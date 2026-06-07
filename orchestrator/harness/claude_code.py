@@ -136,7 +136,14 @@ class ClaudeCodeCLIAdapter:
         mcp_servers: list[McpServer],
     ) -> SessionId:
         handle = uuid.uuid4().hex
-        self._sessions[handle] = _Session(cwd=Path(cwd), caps=caps, mcp_servers=list(mcp_servers))
+        sess = _Session(cwd=Path(cwd), caps=caps, mcp_servers=list(mcp_servers))
+        if sess.mcp_servers:
+            # Written once here (not per-prompt) so repeated prompts/resume don't
+            # orphan temp files. Lives in $TMPDIR, outside the worktree — never in
+            # the agent diff. Cleaned up in cancel(); a leak on a non-cancelled
+            # path is acceptable for MVP (same as the OpenCode adapter).
+            sess.mcp_config_path = _write_mcp_config(sess.mcp_servers)
+        self._sessions[handle] = sess
         return handle
 
     async def prompt(
@@ -147,23 +154,11 @@ class ClaudeCodeCLIAdapter:
         output_schema: dict | None = None,
     ) -> AsyncIterator[Event]:
         sess = self._sessions[session]
-        mcp_flags: list[str] = []
-        extra_tools: tuple[str, ...] = ()
-        if sess.mcp_servers:
-            cfg_path = _write_mcp_config(sess.mcp_servers)
-            sess.mcp_config_path = cfg_path
-            mcp_flags = ["--mcp-config", cfg_path]
-            extra_tools = tuple(f"mcp__{s.name}" for s in sess.mcp_servers)
+        extra_tools = tuple(f"mcp__{s.name}" for s in sess.mcp_servers)
         flags = self.translate(sess.caps, cwd=sess.cwd, extra_allowed_tools=extra_tools)
-        cmd = [
-            *self._binary,
-            "-p",
-            text,
-            "--output-format",
-            "stream-json",
-            *flags,
-            *mcp_flags,
-        ]
+        mcp_flags = ["--mcp-config", sess.mcp_config_path] if sess.mcp_config_path else []
+        cmd = [*self._binary, "-p", text, "--output-format", "stream-json",
+               *flags, *mcp_flags]
         return self._stream(session, cmd)
 
     async def _stream(self, session: SessionId, cmd: list[str]) -> AsyncIterator[Event]:
