@@ -12,7 +12,7 @@ import typer
 from orchestrator.compile.compiler import compile_pipeline
 from orchestrator.config.loader import ConfigError, load_workspace
 from orchestrator.config.schemas import Mode, StepType
-from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
+from orchestrator.harness.registry import HarnessRegistry
 from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tracer
 from orchestrator.runtime.controller import make_controller
 from orchestrator.runtime.executors import run_agent_step
@@ -107,7 +107,7 @@ def run(
         raise typer.Exit(1)
 
     configure_tracing(exporter=None)
-    adapter = ClaudeCodeCLIAdapter()  # honors $ORCH_CLAUDE_BIN
+    registry = HarnessRegistry.from_env()  # adapters honor $ORCH_*_BIN
     run_id = uuid.uuid4().hex[:8]
 
     # Single-step mode (M2 behavior, still supported).
@@ -122,6 +122,7 @@ def run(
             )
             raise typer.Exit(2)
         ctx = RunContext(run_id=run_id, inputs={"task": task})
+        adapter = registry.adapter_for(workspace.roles[step.role].harness)
 
         async def _one():
             tracer = get_tracer()
@@ -147,7 +148,7 @@ def run(
     # Full-pipeline mode (M3).
     try:
         controller = make_controller(
-            pipe.mode, workspace, adapter, repo, checkpoint_db=_checkpoint_db(repo)
+            pipe.mode, workspace, registry, repo, checkpoint_db=_checkpoint_db(repo)
         )
     except NotImplementedError as exc:
         typer.echo(f"error: {exc}")
@@ -204,9 +205,9 @@ def resume(
         typer.echo(f"config error: {exc}")
         raise typer.Exit(1) from exc
     configure_tracing(exporter=None)
-    adapter = ClaudeCodeCLIAdapter()
+    registry = HarnessRegistry.from_env()
     controller = make_controller(
-        Mode.declarative, workspace, adapter, repo, checkpoint_db=_checkpoint_db(repo)
+        Mode.declarative, workspace, registry, repo, checkpoint_db=_checkpoint_db(repo)
     )
     try:
         ctx = asyncio.run(controller.resume(run_id, decision))

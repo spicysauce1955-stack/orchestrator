@@ -1,0 +1,13 @@
+# M6a demo: classify on Claude (task) -> implement on OpenCode (harness != model).
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: classify
+    type: task
+    prompt: 'Classify {{task}} as one of: bugfix | feature | refactor. Reply JSON {"kind":"<one>"}.'
+    output_schema: { kind: "enum[bugfix,feature,refactor]" }
+  - id: implement
+    role: opencoder
+    needs: [classify]
+    prompt: "Kind: {{classify.output.kind}}\nImplement: {{task}}"
+    success_criteria: "true"

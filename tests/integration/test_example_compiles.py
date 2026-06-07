@@ -35,3 +35,12 @@ def test_example_review_loop_is_conditional():
     result = compile_pipeline(ws, "feature")
     edges = {(e.source, e.target, e.conditional) for e in result.ir.edges}
     assert ("review", "implement", True) in edges
+
+
+def test_mixed_harness_pipeline_compiles():
+    ws = load_workspace(EXAMPLE)
+    result = compile_pipeline(ws, "mixed-harness")
+    assert result.ok, result.errors
+    assert set(result.ir.nodes) == {"classify", "implement"}
+    edges = {(e.source, e.target) for e in result.ir.edges}
+    assert ("classify", "implement") in edges
