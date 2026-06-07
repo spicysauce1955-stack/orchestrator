@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from orchestrator.observability.query import run_status
@@ -10,7 +11,7 @@ from orchestrator.observability.spans import (
     configure_tracing,
     get_tracer,
 )
-from orchestrator.observability.store import SqliteSpanExporter
+from orchestrator.observability.store import SqliteSpanExporter, connect
 
 
 def _seed(db: Path) -> None:
@@ -46,6 +47,7 @@ def test_run_status_lists_steps_and_overall_state(tmp_path: Path) -> None:
         ("plan", "planner", False),
         ("implement", "implementer", True),
     ]
+    assert all(s.kind == "agent" for s in view.steps)  # default kind when step.type absent
 
 
 def test_run_status_unknown_run_returns_none(tmp_path: Path) -> None:
@@ -56,10 +58,6 @@ def test_run_status_unknown_run_returns_none(tmp_path: Path) -> None:
 
 def test_all_spans_of_a_run_share_one_trace(tmp_path: Path) -> None:
     # Locks the invariant the queries depend on (linear MVP pipelines).
-    import sqlite3
-
-    from orchestrator.observability.store import connect
-
     db = tmp_path / "spans.sqlite"
     _seed(db)
     conn = connect(db)

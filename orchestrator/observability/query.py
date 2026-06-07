@@ -6,6 +6,7 @@ A run's spans share one trace_id; we resolve run_id → trace_id via the root
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -53,26 +54,26 @@ def _spans(conn: sqlite3.Connection, trace_id: str, name: str) -> list[sqlite3.R
 
 
 def run_status(db: Path, run_id: str) -> StatusView | None:
-    conn = _open(db)
-    trace = _trace_for_run(conn, run_id)
-    if trace is None:
-        return None
-    run_row = _spans(conn, trace, "run")[0]
-    pipeline = json.loads(run_row["attrs"]).get("pipeline", "")
-    steps: list[StepView] = []
-    any_error = False
-    for row in _spans(conn, trace, "step"):
-        attrs = json.loads(row["attrs"])
-        is_error = bool(attrs.get("step.is_error", False))
-        any_error = any_error or is_error
-        steps.append(
-            StepView(
-                step_id=str(attrs.get("step.id", "")),
-                role=str(attrs.get("step.role", "")),
-                kind=str(attrs.get("step.type", "agent")),
-                is_error=is_error,
+    with contextlib.closing(_open(db)) as conn:
+        trace = _trace_for_run(conn, run_id)
+        if trace is None:
+            return None
+        run_row = _spans(conn, trace, "run")[0]
+        pipeline = json.loads(run_row["attrs"]).get("pipeline", "")
+        steps: list[StepView] = []
+        any_error = False
+        for row in _spans(conn, trace, "step"):
+            attrs = json.loads(row["attrs"])
+            is_error = bool(attrs.get("step.is_error", False))
+            any_error = any_error or is_error
+            steps.append(
+                StepView(
+                    step_id=str(attrs.get("step.id", "")),
+                    role=str(attrs.get("step.role", "")),
+                    kind=str(attrs.get("step.type", "agent")),
+                    is_error=is_error,
+                )
             )
-        )
     return StatusView(
         run_id=run_id,
         pipeline=pipeline,
