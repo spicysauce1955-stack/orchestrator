@@ -47,3 +47,8 @@ def test_limit_caps_results(tmp_path):
 def test_no_match_returns_empty(tmp_path):
     (tmp_path / "x.md").write_text("nothing relevant\n")
     assert search("zzz", ["*.md"], tmp_path, limit=10) == []
+
+
+def test_empty_query_returns_empty(tmp_path):
+    (tmp_path / "x.md").write_text("hello")
+    assert search("", ["*.md"], tmp_path) == []

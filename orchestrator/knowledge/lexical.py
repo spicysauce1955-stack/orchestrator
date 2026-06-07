@@ -21,9 +21,8 @@ class SearchResult:
 def _iter_files(sources: list[str], root: Path) -> list[Path]:
     seen: dict[Path, None] = {}
     for pattern in sources:
-        # "docs/**" in Python ≤3.11 yields only the directory itself; append
-        # "/*" so we also visit files directly inside, then let the recursive
-        # "**" variant pick up deeper levels.
+        # Path.glob("docs/**") in Python <=3.11 yields only directories, not
+        # files. Appending "/*" to produce "docs/**/*" matches files at any depth.
         patterns = [pattern]
         if pattern.endswith("/**"):
             patterns.append(pattern + "/*")
