@@ -1,0 +1,4 @@
+# The run-owner (spec §7). Read-only: it classifies, relays verdicts, and answers
+# worker questions — it does not edit code. Reserved role name: `orchestrator`.
+harness: claude-code
+permissions: read-only
