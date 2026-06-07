@@ -15,6 +15,7 @@ from pathlib import Path
 from orchestrator.agents.message_bus import MessageBus
 from orchestrator.config.loader import Workspace
 from orchestrator.config.schemas import Harness, PermissionProfile, Pipeline, Role, Step
+from orchestrator.harness.adapter import HarnessAdapter
 from orchestrator.harness.registry import HarnessRegistry
 from orchestrator.observability.spans import get_tracer
 from orchestrator.runtime.executors import _drive_harness, run_task_step
@@ -31,6 +32,9 @@ def _default_orchestrator_role() -> Role:
 
 
 class OrchestratorAgent:
+    """Run-owner doing the shared coordination (spec §7 MVP): classify, relay
+    the review verdict, and answer worker questions. Not a router."""
+
     def __init__(self, *, workspace: Workspace, registry: HarnessRegistry,
                  bus: MessageBus, repo: Path) -> None:
         self.workspace = workspace
@@ -39,7 +43,7 @@ class OrchestratorAgent:
         self.repo = Path(repo)
         self.role = workspace.roles.get(ORCHESTRATOR_ROLE) or _default_orchestrator_role()
 
-    def _adapter(self):
+    def _adapter(self) -> HarnessAdapter:
         return self.registry.adapter_for(self.role.harness)
 
     async def run_task(self, pipeline: Pipeline, step: Step, ctx: RunContext) -> Artifact:
@@ -48,6 +52,9 @@ class OrchestratorAgent:
         art = await run_task_step(
             self.workspace, pipeline, step, ctx, repo=self.repo, adapter=self._adapter()
         )
+        # MVP: non-merge task steps ARE the orchestrator's coordination glue
+        # (canonically `classify`); all are logged on the bus as kind="classify".
+        # A future second task-step type would warrant a distinct kind.
         self.bus.send("orchestrator", "run", "classify", art.output)
         return art
 
@@ -68,6 +75,6 @@ class OrchestratorAgent:
             "Answer concisely so the worker can proceed."
         )
         agg = await _drive_harness(self._adapter(), caps, self.repo, prompt, None, get_tracer())
-        answer_text = agg.output or agg.result_text
+        answer_text = agg.result_text or agg.output
         self.bus.send("orchestrator", from_step, "answer", answer_text)
         return answer_text
