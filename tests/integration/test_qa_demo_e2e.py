@@ -36,5 +36,13 @@ async def test_qa_demo_completes_with_one_answered_question(tmp_path, monkeypatc
     pipe = ws.pipelines["qa-demo"]
     ctx = await sched.run(pipe, {"task": "add a widget"}, "run-qa-1")
     assert ctx.status == RunStatus.COMPLETED
+    # classify ran once; the implementer asked exactly one question, answered once.
     kinds = [m.kind for m in sched.bus.log]
-    assert "classify" in kinds and "question" in kinds and "answer" in kinds
+    assert kinds.count("classify") == 1
+    assert kinds.count("question") == 1
+    assert kinds.count("answer") == 1
+    # the question precedes its answer (hub-and-spoke ordering)
+    assert kinds.index("question") < kinds.index("answer")
+    # the scheduler captured structured output for both steps
+    assert ctx.artifacts["classify"].output_data == {"kind": "feature"}
+    assert "implement" in ctx.artifacts
