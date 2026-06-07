@@ -87,3 +87,13 @@ def test_multiple_read_sources_merge_globs(tmp_path):
         "docs/**",
         ".orchestrator/knowledge/lessons.md",
     ]
+
+
+def test_write_only_grant_builds_server_with_empty_sources(tmp_path):
+    # A write-only role still gets a server (it can write), with no read sources.
+    caps = ResolvedCaps(knowledge_write=("lessons",))
+    [srv] = build_knowledge_mcp(_ws(), caps, tmp_path)
+    assert json.loads(srv.env["ORCH_KB_SOURCES"]) == []
+    assert srv.env["ORCH_KB_WRITE_TARGET"] == str(
+        tmp_path / ".orchestrator/knowledge/lessons.md"
+    )
