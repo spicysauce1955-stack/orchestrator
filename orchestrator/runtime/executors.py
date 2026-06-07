@@ -164,6 +164,12 @@ async def run_agent_step(
             step_span.set_attribute("step.harness", role.harness.value)
 
             base_prompt = _render_prompt(step, step.role, ctx)
+            relayed = ctx.relayed_feedback.pop(step.id, None)
+            if relayed:
+                base_prompt = (
+                    f"{base_prompt}\n\n[Reviewer feedback relayed by the orchestrator]:\n"
+                    f"{relayed}\nAddress it in this attempt."
+                )
             feedback: str | None = None
             for attempt in range(step.max_retries + 1):
                 if feedback is None:
