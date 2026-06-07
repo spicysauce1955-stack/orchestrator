@@ -63,6 +63,8 @@ def main() -> int:
             keyword = "classify"
         elif "review" in pl:
             keyword = "review"
+        elif "question" in pl:
+            keyword = "question"
         else:
             keyword = "default"
         script = Path(script_dir) / f"{keyword}.ndjson"

@@ -133,6 +133,7 @@ async def run_agent_step(
     *,
     repo: Path,
     adapter: HarnessAdapter,
+    agent=None,  # duck-typed OrchestratorAgent; None disables worker Q&A (back-compat)
 ) -> Artifact:
     """Run one agent step end-to-end: worktree → harness drive → success_criteria/retry."""
     if step.role is None:
@@ -182,10 +183,21 @@ async def run_agent_step(
                         f"{base_prompt}\n\nThe previous attempt failed"
                         f" `success_criteria`:\n{feedback}\nFix the issues and try again."
                     )
-                agg = await _drive_harness(
-                    adapter, caps, worktree.path, prompt, step.output_schema, tracer,
-                    mcp_servers=mcp_servers,
-                )
+                q_prompt = prompt
+                for _q in range(step.max_questions + 1):
+                    agg = await _drive_harness(
+                        adapter, caps, worktree.path, q_prompt, step.output_schema, tracer,
+                        mcp_servers=mcp_servers,
+                    )
+                    od, _ = parse_output(agg.result_text, step.output_schema)
+                    question = (od or {}).get("question") if not agg.is_error else None
+                    if not question or agent is None or _q >= step.max_questions:
+                        break
+                    answer = await agent.answer(question, from_step=step.id)
+                    q_prompt = (
+                        f"{prompt}\n\n[You asked]: {question}\n"
+                        f"[Orchestrator answer]: {answer}\nNow proceed."
+                    )
                 total_cost += agg.cost_usd
                 total_tokens += agg.tokens
                 output = agg.output

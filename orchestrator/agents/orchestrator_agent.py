@@ -70,9 +70,9 @@ class OrchestratorAgent:
         self.bus.send(from_step, "orchestrator", "question", question)
         caps: ResolvedCaps = resolve_capabilities(self.role, self.workspace)
         prompt = (
-            "A worker agent is blocked and asked the orchestrator a question.\n"
-            f"Worker: {from_step}\nQuestion: {question}\n"
-            "Answer concisely so the worker can proceed."
+            "A worker agent is blocked and needs guidance from the orchestrator.\n"
+            f"Worker: {from_step}\nIt reported: {question}\n"
+            "Reply concisely so the worker can proceed."
         )
         agg = await _drive_harness(self._adapter(), caps, self.repo, prompt, None, get_tracer())
         answer_text = agg.result_text or agg.output
