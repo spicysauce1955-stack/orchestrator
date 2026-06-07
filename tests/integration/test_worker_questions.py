@@ -70,3 +70,18 @@ async def test_question_without_agent_does_not_loop(tmp_path, monkeypatch):
                                repo=repo, adapter=adapter)  # no agent=
     assert (art.output_data or {}).get("question")
     assert bus.log == []
+
+
+async def test_max_questions_zero_never_answers_even_with_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "question.1.ndjson"))
+    ws, reg, bus, agent = _setup(tmp_path)
+    repo = _repo(tmp_path)
+    adapter = reg.adapter_for(Harness.claude_code)
+    ctx = RunContext(run_id="r3", inputs={"task": "x"}, pipeline_name="p")
+    step = Step(id="implement", role="implementer", type=StepType.agent,
+                prompt="question {{task}}", output_schema={"question": "string"},
+                max_questions=0)
+    art = await run_agent_step(ws, Pipeline(name="p", steps=[step]), step, ctx,
+                               repo=repo, adapter=adapter, agent=agent)
+    assert (art.output_data or {}).get("question")  # asked, but never answered
+    assert bus.log == []                             # max_questions=0 → no Q&A

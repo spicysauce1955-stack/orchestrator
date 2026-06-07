@@ -125,6 +125,39 @@ async def _drive_harness(
     return agg
 
 
+async def _drive_with_questions(
+    adapter: HarnessAdapter,
+    caps: ResolvedCaps,
+    cwd: Path,
+    prompt: str,
+    step: Step,
+    tracer,
+    mcp_servers: Sequence[McpServer],
+    agent,
+) -> _Aggregate:
+    """Drive the harness, handling up to step.max_questions worker→orch Q&A rounds.
+
+    If the harness result carries a structured `question` (and an agent is
+    available and the budget remains), the orchestrator answers and the SAME
+    worktree is re-prompted with the answer appended. Returns the final drive.
+    """
+    q_prompt = prompt
+    for q_round in range(step.max_questions + 1):
+        agg = await _drive_harness(
+            adapter, caps, cwd, q_prompt, step.output_schema, tracer, mcp_servers=mcp_servers
+        )
+        output_data, _ = parse_output(agg.result_text, step.output_schema)
+        question = (output_data or {}).get("question") if not agg.is_error else None
+        if not question or agent is None or q_round >= step.max_questions:
+            return agg
+        answer = await agent.answer(question, from_step=step.id)
+        q_prompt = (
+            f"{prompt}\n\n[You asked]: {question}\n"
+            f"[Orchestrator answer]: {answer}\nNow proceed."
+        )
+    return agg  # unreachable (the q_round bound always breaks), kept for the type checker
+
+
 async def run_agent_step(
     workspace: Workspace,
     pipeline: Pipeline,
@@ -183,21 +216,9 @@ async def run_agent_step(
                         f"{base_prompt}\n\nThe previous attempt failed"
                         f" `success_criteria`:\n{feedback}\nFix the issues and try again."
                     )
-                q_prompt = prompt
-                for _q in range(step.max_questions + 1):
-                    agg = await _drive_harness(
-                        adapter, caps, worktree.path, q_prompt, step.output_schema, tracer,
-                        mcp_servers=mcp_servers,
-                    )
-                    od, _ = parse_output(agg.result_text, step.output_schema)
-                    question = (od or {}).get("question") if not agg.is_error else None
-                    if not question or agent is None or _q >= step.max_questions:
-                        break
-                    answer = await agent.answer(question, from_step=step.id)
-                    q_prompt = (
-                        f"{prompt}\n\n[You asked]: {question}\n"
-                        f"[Orchestrator answer]: {answer}\nNow proceed."
-                    )
+                agg = await _drive_with_questions(
+                    adapter, caps, worktree.path, prompt, step, tracer, mcp_servers, agent
+                )
                 total_cost += agg.cost_usd
                 total_tokens += agg.tokens
                 output = agg.output
