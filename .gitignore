@@ -16,3 +16,6 @@ build/
 
 # Per-repo run state: checkpoint + span SQLite DBs (never GC'd, not source)
 .orch/
+
+# Benchmark run outputs
+bench/results/
