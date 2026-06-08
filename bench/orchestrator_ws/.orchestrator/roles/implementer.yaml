@@ -1,0 +1,3 @@
+harness: claude-code
+model: opus
+permissions: edit
