@@ -120,3 +120,51 @@ def test_run_messages_unknown_run_returns_empty(tmp_path: Path) -> None:
     db = tmp_path / "spans.sqlite"
     _seed(db)
     assert run_messages(db, "nope") == []
+
+
+def _emit_run(db: Path, run_id: str, pipeline: str, step_id: str, *, status: str | None) -> None:
+    """Emit one run span (its own trace) with a single step. Simulates a run OR a resume."""
+    configure_tracing(exporter=SqliteSpanExporter(db))
+    tracer = get_tracer()
+    with tracer.start_as_current_span(SPAN_RUN) as run:
+        run.set_attribute("run.id", run_id)
+        run.set_attribute("pipeline", pipeline)
+        if status is not None:
+            run.set_attribute("run.status", status)
+        with tracer.start_as_current_span(SPAN_STEP) as s:
+            s.set_attribute("step.id", step_id)
+            s.set_attribute("step.is_error", False)
+
+
+def test_run_status_unions_traces_for_a_run(tmp_path: Path) -> None:
+    # A resume opens a SECOND run span (new trace) with the same run.id; both
+    # traces' steps must surface (M6d resume-visibility follow-up).
+    db = tmp_path / "spans.sqlite"
+    _emit_run(db, "r9", "demo", "audit", status=None)  # original run
+    _emit_run(db, "r9", "demo", "after", status=None)  # resume
+
+    view = run_status(db, "r9")
+    assert view is not None
+    assert {s.step_id for s in view.steps} == {"audit", "after"}
+
+
+def test_run_status_uses_explicit_run_status_attr(tmp_path: Path) -> None:
+    # When a run span records `run.status`, the read model reports it verbatim
+    # (so REJECTED is distinguishable from COMPLETED).
+    db = tmp_path / "spans.sqlite"
+    _emit_run(db, "r10", "demo", "audit", status="rejected")
+
+    view = run_status(db, "r10")
+    assert view is not None
+    assert view.status == "rejected"
+
+
+def test_run_status_terminal_status_is_the_last_trace(tmp_path: Path) -> None:
+    # original run paused (no terminal status), resume rejected → rejected wins.
+    db = tmp_path / "spans.sqlite"
+    _emit_run(db, "r11", "demo", "audit", status=None)
+    _emit_run(db, "r11", "demo", "after", status="rejected")
+
+    view = run_status(db, "r11")
+    assert view is not None
+    assert view.status == "rejected"

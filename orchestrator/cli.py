@@ -222,10 +222,14 @@ def memory(
     repo: Path = typer.Option(Path("."), "--repo", help="Repo whose .orch/ holds the span store."),
 ) -> None:
     """Show a run's coordination board (message bus log) from the span store."""
-    msgs = run_messages(_span_db(repo), run_id)
-    # run_messages returns [] for both an unknown run and a run with no messages;
-    # the MVP does not distinguish them here.
+    db = _span_db(repo)
+    msgs = run_messages(db, run_id)
     if not msgs:
+        # run_messages returns [] for both an unknown run and a known run with no
+        # messages; probe run_status to tell them apart.
+        if run_status(db, run_id) is None:
+            typer.echo(f"error: no run '{run_id}' found in the span store.")
+            raise typer.Exit(1)
         typer.echo(f"run '{run_id}': no messages recorded.")
         return
     for m in msgs:

@@ -96,6 +96,7 @@ class _Session:
     cwd: Path
     caps: ResolvedCaps
     mcp_servers: list[McpServer]
+    model: str | None = None
     harness_session_id: str | None = None
     mcp_config_path: str | None = None
 
@@ -134,9 +135,10 @@ class ClaudeCodeCLIAdapter:
         cwd: Path,
         caps: ResolvedCaps,
         mcp_servers: list[McpServer],
+        model: str | None = None,
     ) -> SessionId:
         handle = uuid.uuid4().hex
-        sess = _Session(cwd=Path(cwd), caps=caps, mcp_servers=list(mcp_servers))
+        sess = _Session(cwd=Path(cwd), caps=caps, mcp_servers=list(mcp_servers), model=model)
         if sess.mcp_servers:
             # Written once here (not per-prompt) so repeated prompts/resume don't
             # orphan temp files. Lives in $TMPDIR, outside the worktree — never in
@@ -157,8 +159,9 @@ class ClaudeCodeCLIAdapter:
         extra_tools = tuple(f"mcp__{s.name}" for s in sess.mcp_servers)
         flags = self.translate(sess.caps, cwd=sess.cwd, extra_allowed_tools=extra_tools)
         mcp_flags = ["--mcp-config", sess.mcp_config_path] if sess.mcp_config_path else []
+        model_flags = ["--model", sess.model] if sess.model else []
         cmd = [*self._binary, "-p", text, "--output-format", "stream-json",
-               *flags, *mcp_flags]
+               *flags, *mcp_flags, *model_flags]
         return self._stream(session, cmd)
 
     async def _stream(self, session: SessionId, cmd: list[str]) -> AsyncIterator[Event]:

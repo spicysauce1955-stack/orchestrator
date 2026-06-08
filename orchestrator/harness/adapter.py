@@ -34,6 +34,7 @@ class HarnessAdapter(Protocol):
         cwd: Path,
         caps: ResolvedCaps,
         mcp_servers: list[McpServer],
+        model: str | None = None,
     ) -> SessionId: ...
 
     async def prompt(

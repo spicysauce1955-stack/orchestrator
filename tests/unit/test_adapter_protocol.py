@@ -14,7 +14,7 @@ def test_mcp_server_fields():
 
 def test_protocol_is_runtime_checkable():
     class Dummy:
-        async def start_session(self, *, cwd, caps, mcp_servers) -> SessionId:
+        async def start_session(self, *, cwd, caps, mcp_servers, model=None) -> SessionId:
             return "h1"
 
         async def prompt(self, session, text, *, output_schema=None) -> AsyncIterator[Event]:

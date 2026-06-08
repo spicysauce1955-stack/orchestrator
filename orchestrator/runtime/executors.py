@@ -95,10 +95,13 @@ async def _drive_harness(
     output_schema: dict | None,
     tracer,
     mcp_servers: Sequence[McpServer] = (),
+    model: str | None = None,
 ) -> _Aggregate:
     """Start a session, stream events into session/tool/file spans, aggregate."""
     agg = _Aggregate()
-    session = await adapter.start_session(cwd=cwd, caps=caps, mcp_servers=list(mcp_servers))
+    session = await adapter.start_session(
+        cwd=cwd, caps=caps, mcp_servers=list(mcp_servers), model=model
+    )
     try:
         with tracer.start_as_current_span(SPAN_SESSION) as sess_span:
             stream = await adapter.prompt(session, prompt, output_schema=output_schema)
@@ -137,6 +140,7 @@ async def _drive_with_questions(
     tracer,
     mcp_servers: Sequence[McpServer],
     agent,
+    model: str | None = None,
 ) -> _Aggregate:
     """Drive the harness, handling up to step.max_questions worker→orch Q&A rounds.
 
@@ -147,7 +151,8 @@ async def _drive_with_questions(
     q_prompt = prompt
     for q_round in range(step.max_questions + 1):
         agg = await _drive_harness(
-            adapter, caps, cwd, q_prompt, step.output_schema, tracer, mcp_servers=mcp_servers
+            adapter, caps, cwd, q_prompt, step.output_schema, tracer,
+            mcp_servers=mcp_servers, model=model,
         )
         output_data, _ = parse_output(agg.result_text, step.output_schema)
         question = (output_data or {}).get("question") if not agg.is_error else None
@@ -221,7 +226,8 @@ async def run_agent_step(
                         f" `success_criteria`:\n{feedback}\nFix the issues and try again."
                     )
                 agg = await _drive_with_questions(
-                    adapter, caps, worktree.path, prompt, step, tracer, mcp_servers, agent
+                    adapter, caps, worktree.path, prompt, step, tracer, mcp_servers, agent,
+                    model=role.model,
                 )
                 total_cost += agg.cost_usd
                 total_tokens += agg.tokens

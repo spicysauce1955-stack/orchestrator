@@ -13,3 +13,6 @@ build/
 
 # Temporary agent worktrees created by the executor
 .worktrees/
+
+# Per-repo run state: checkpoint + span SQLite DBs (never GC'd, not source)
+.orch/

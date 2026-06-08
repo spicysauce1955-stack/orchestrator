@@ -3,17 +3,13 @@ import subprocess
 import pytest
 
 from orchestrator.runtime.merge import MergeConflict, apply_diffs, base_branch
+from tests.fixtures.repo import commit_all, init_git_repo
 
 
 def _repo(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    repo = init_git_repo(tmp_path / "repo")
     (repo / "f.txt").write_text("line1\nline2\nline3\n")
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    commit_all(repo)
     return repo
 
 

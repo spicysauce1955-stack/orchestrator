@@ -143,7 +143,12 @@ class DeterministicScheduler:
             ctx.status = RunStatus.PAUSED
             ctx.pending_interrupt = dict(interrupts[0].value)
         elif ctx.status == RunStatus.RUNNING:
-            ctx.status = RunStatus.COMPLETED
+            # A human-rejected HITL gate is terminal but distinct from a run that
+            # completed and merged (resolves the M5 ABORTED/REJECTED follow-up).
+            if any(d == "reject" for d in ctx.gate_decisions.values()):
+                ctx.status = RunStatus.REJECTED
+            else:
+                ctx.status = RunStatus.COMPLETED
         return ctx
 
     async def run(
@@ -159,10 +164,13 @@ class DeterministicScheduler:
                 run_span.set_attribute("run.id", run_id)
                 run_span.set_attribute("pipeline", pipeline.name)
                 result = await graph.ainvoke({"ctx": ctx}, config)
-        return self._finalize(result)
+                final = self._finalize(result)
+                run_span.set_attribute("run.status", final.status.value)
+        return final
 
     async def resume(self, run_id: str, decision: str) -> RunContext:
         config = {"configurable": {"thread_id": run_id}, "recursion_limit": 100}
+        tracer = get_tracer()
         async with self._saver() as saver:
             ckpt = await saver.aget(config)
             if ckpt is None:
@@ -173,5 +181,13 @@ class DeterministicScheduler:
                 self._pipeline_cache.get(pipeline_name) or self.workspace.pipelines[pipeline_name]
             )
             graph = self._build(pipeline, saver)
-            result = await graph.ainvoke(Command(resume=decision), config)
-            return self._finalize(result)
+            # Open a run span (same run.id) so steps executed on resume are grouped
+            # under a resolvable trace — without it they'd scatter as root spans and
+            # vanish from status/metrics/memory (M6d resume-visibility follow-up).
+            with tracer.start_as_current_span(SPAN_RUN) as run_span:
+                run_span.set_attribute("run.id", run_id)
+                run_span.set_attribute("pipeline", pipeline_name)
+                result = await graph.ainvoke(Command(resume=decision), config)
+                final = self._finalize(result)
+                run_span.set_attribute("run.status", final.status.value)
+            return final

@@ -41,6 +41,30 @@ async def test_mcp_config_passed_and_tools_allowed(monkeypatch, tmp_path):
     assert not cfg_path.startswith(str(tmp_path))  # config lives outside the worktree
 
 
+async def test_session_model_emits_model_flag(monkeypatch, tmp_path):
+    # A per-session model (from the role) is translated to a `--model` flag.
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "plan.ndjson"))
+    monkeypatch.setenv("ORCH_FAKE_ARGV", str(tmp_path / "argv.txt"))
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    session = await adapter.start_session(
+        cwd=tmp_path, caps=ResolvedCaps.read_only(), mcp_servers=[], model="claude-opus-4-8"
+    )
+    stream = await adapter.prompt(session, "go")
+    async for _ in stream:
+        pass
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert "--model" in argv and "claude-opus-4-8" in argv
+
+
+async def test_no_model_no_model_flag(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "plan.ndjson"))
+    monkeypatch.setenv("ORCH_FAKE_ARGV", str(tmp_path / "argv.txt"))
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    await _drive(adapter, tmp_path, [])
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert "--model" not in argv
+
+
 async def test_no_servers_no_mcp_flag(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_FAKE_SCRIPT", str(SCRIPTS / "plan.ndjson"))
     monkeypatch.setenv("ORCH_FAKE_ARGV", str(tmp_path / "argv.txt"))

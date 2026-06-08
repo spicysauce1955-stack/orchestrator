@@ -11,6 +11,7 @@ class RunStatus(str, Enum):
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"
+    REJECTED = "rejected"  # a HITL gate was rejected — terminal, did not merge
     ERROR = "error"
 
 

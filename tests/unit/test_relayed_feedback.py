@@ -1,4 +1,3 @@
-import subprocess
 import sys
 from pathlib import Path
 
@@ -7,20 +6,16 @@ from orchestrator.config.schemas import Config, Harness, Pipeline, Role, Step, S
 from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
 from orchestrator.runtime.executors import run_agent_step
 from orchestrator.runtime.state import RunContext
+from tests.fixtures.repo import commit_all, init_git_repo
 
 FAKE = Path(__file__).parent.parent / "fixtures" / "fake_harness" / "fake_harness.py"
 SCRIPTS = FAKE.parent / "scripts"
 
 
 def _repo(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    repo = init_git_repo(tmp_path / "repo")
     (repo / "README.md").write_text("base\n")
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    commit_all(repo)
     return repo
 
 

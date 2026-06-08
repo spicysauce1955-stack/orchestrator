@@ -44,6 +44,22 @@ async def test_passes_model_dir_and_format(monkeypatch, tmp_path):
     assert "hello oc" in argv
 
 
+async def test_session_model_threads_to_command(monkeypatch, tmp_path):
+    # A per-session model (from the role) reaches the CLI even when the adapter
+    # was constructed with no default model; the `glm` alias is applied.
+    monkeypatch.setenv("ORCH_OC_ARGV", str(tmp_path / "argv.txt"))
+    monkeypatch.setenv("ORCH_OC_SCRIPT", str(SCRIPTS / "default.ndjson"))
+    adapter = OpenCodeCLIAdapter(binary=[sys.executable, str(FAKE)])  # no construction model
+    session = await adapter.start_session(
+        cwd=tmp_path, caps=ResolvedCaps.read_only(), mcp_servers=[], model="glm"
+    )
+    stream = await adapter.prompt(session, "hello")
+    async for _ in stream:
+        pass
+    argv = (tmp_path / "argv.txt").read_text().splitlines()
+    assert "-m" in argv and "zhipu/glm-4.6" in argv
+
+
 async def test_caps_written_to_opencode_config(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_OC_SCRIPT", str(SCRIPTS / "default.ndjson"))
     monkeypatch.setenv("ORCH_OC_CONFIG_SEEN", str(tmp_path / "cfgpath.txt"))

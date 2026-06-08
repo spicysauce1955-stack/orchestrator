@@ -99,3 +99,23 @@ def test_metrics_unknown_run_exits_1(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(app, ["metrics", "ghost"])
     assert result.exit_code == 1
     assert "ghost" in result.stdout
+
+
+def test_memory_unknown_run_exits_1(tmp_path: Path, monkeypatch) -> None:
+    # An unknown run is distinguishable from a known run with no messages
+    # (M6d follow-up: memory probes run_status to disambiguate).
+    db = tmp_path / "spans.sqlite"
+    _seed_full(db)
+    monkeypatch.setenv("ORCH_SPAN_DB", str(db))
+    result = runner.invoke(app, ["memory", "ghost"])
+    assert result.exit_code == 1
+    assert "ghost" in result.stdout
+
+
+def test_memory_known_run_without_messages_exits_0(tmp_path: Path, monkeypatch) -> None:
+    db = tmp_path / "spans.sqlite"
+    _seed(db)  # run "r1" exists but emits no `message` spans
+    monkeypatch.setenv("ORCH_SPAN_DB", str(db))
+    result = runner.invoke(app, ["memory", "r1"])
+    assert result.exit_code == 0
+    assert "no messages" in result.stdout.lower()

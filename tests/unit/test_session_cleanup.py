@@ -16,7 +16,7 @@ class _FakeAdapter:
         self.cancelled: list[str] = []
         self._raise = raise_on_prompt
 
-    async def start_session(self, *, cwd, caps, mcp_servers):
+    async def start_session(self, *, cwd, caps, mcp_servers, model=None):
         return "sess-1"
 
     async def prompt(self, session, text, *, output_schema):

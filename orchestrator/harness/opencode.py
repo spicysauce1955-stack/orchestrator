@@ -118,6 +118,7 @@ class _OCSession:
     cwd: Path
     caps: ResolvedCaps
     mcp_servers: list[McpServer]
+    model: str | None = None
     config_path: str | None = None
     harness_session_id: str | None = None
 
@@ -138,7 +139,12 @@ class OpenCodeCLIAdapter:
         self._sessions: dict[SessionId, _OCSession] = {}
 
     async def start_session(
-        self, *, cwd: Path, caps: ResolvedCaps, mcp_servers: list[McpServer]
+        self,
+        *,
+        cwd: Path,
+        caps: ResolvedCaps,
+        mcp_servers: list[McpServer],
+        model: str | None = None,
     ) -> SessionId:
         handle = uuid.uuid4().hex
         cfg = build_permission_config(caps)
@@ -157,8 +163,13 @@ class OpenCodeCLIAdapter:
         fd, path = tempfile.mkstemp(prefix="orch-oc-", suffix=".json")
         with os.fdopen(fd, "w") as fh:
             json.dump(cfg, fh)
+        # A per-session model (from the role) overrides the construction default.
         self._sessions[handle] = _OCSession(
-            cwd=Path(cwd), caps=caps, mcp_servers=list(mcp_servers), config_path=path
+            cwd=Path(cwd),
+            caps=caps,
+            mcp_servers=list(mcp_servers),
+            model=_alias_model(model) if model else self._model,
+            config_path=path,
         )
         return handle
 
@@ -175,8 +186,8 @@ class OpenCodeCLIAdapter:
             "--dir",
             str(sess.cwd),
         ]
-        if self._model:
-            cmd += ["-m", self._model]
+        if sess.model:
+            cmd += ["-m", sess.model]
         cmd.append(text)
         return self._stream(session, cmd)
 

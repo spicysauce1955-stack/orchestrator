@@ -60,6 +60,19 @@ def test_golden_graph_node_and_edge_set_is_stable():
     }
 
 
+def test_golden_graph_edge_order_is_stable():
+    # Edge order is deterministic (forward `needs` edges before `on_reject`
+    # back-edges) and the M3 verdict router relies on it; lock the ordered list.
+    result = compile_pipeline(_workspace(), "feature")
+    assert [(e.source, e.target, e.conditional) for e in result.ir.edges] == [
+        ("classify", "plan", False),
+        ("plan", "implement", False),
+        ("implement", "review", False),
+        ("review", "test", True),
+        ("review", "implement", True),
+    ]
+
+
 def test_lowers_to_compilable_langgraph_state_graph():
     pipeline = _workspace().pipelines["feature"]
     ir = build_ir(pipeline)

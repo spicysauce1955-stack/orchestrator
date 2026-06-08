@@ -6,6 +6,7 @@ from orchestrator.config.loader import load_workspace
 from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
 from orchestrator.runtime.scheduler import DeterministicScheduler
 from orchestrator.runtime.state import RunStatus
+from tests.fixtures.repo import commit_all, init_git_repo
 
 FAKE = Path(__file__).parents[1] / "fixtures" / "fake_harness" / "fake_harness.py"
 GH = Path(__file__).parents[1] / "fixtures" / "fake_gh" / "fake_gh.py"
@@ -13,14 +14,9 @@ EXAMPLE = Path(__file__).parents[2] / "examples" / "feature-pipeline" / ".orches
 
 
 def _repo(tmp_path, *, with_origin):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    repo = init_git_repo(tmp_path / "repo")
     (repo / "README.md").write_text("base\n")
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    commit_all(repo)
     if with_origin:
         bare = tmp_path / "origin.git"
         subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
@@ -60,5 +56,5 @@ async def test_full_pipeline_reject_at_gate_skips_merge(tmp_path, monkeypatch):
     sched, ws = _sched(tmp_path, monkeypatch, repo)
     await sched.run(ws.pipelines["full"], {"task": "add a feature"}, "run-full-2")
     ctx = await sched.resume("run-full-2", "reject")
-    assert ctx.status == RunStatus.COMPLETED
+    assert ctx.status == RunStatus.REJECTED  # human-rejected gate is terminal-distinct
     assert "merge" not in ctx.artifacts  # reject routed to END, merge never ran
