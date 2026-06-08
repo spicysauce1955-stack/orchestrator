@@ -1,4 +1,4 @@
-from bench.metrics import Metrics, parse_claude_stream, parse_codex_jsonl
+from bench.metrics import parse_claude_stream, parse_codex_jsonl
 
 
 def test_parse_claude_stream_extracts_cost_and_turns():

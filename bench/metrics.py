@@ -33,8 +33,10 @@ def parse_claude_stream(stream: str) -> Metrics:
     cost = tokens = turns = None
     for obj in _iter_json_lines(stream):
         if obj.get("type") == "result":
-            cost = float(obj.get("total_cost_usd")) if obj.get("total_cost_usd") is not None else cost
-            turns = int(obj.get("num_turns")) if obj.get("num_turns") is not None else turns
+            if obj.get("total_cost_usd") is not None:
+                cost = float(obj["total_cost_usd"])
+            if obj.get("num_turns") is not None:
+                turns = int(obj["num_turns"])
             usage = obj.get("usage") or {}
             it, ot = usage.get("input_tokens"), usage.get("output_tokens")
             if it is not None or ot is not None:
@@ -71,7 +73,8 @@ def orchestrator_metrics(repo_root: Path, run_id: str, span_db: Path) -> Metrics
     )
     cost = _grep_float(proc.stdout, r"total: \$([0-9.]+)")
     tokens = _grep_int(proc.stdout, r"\(([0-9]+) tokens")
-    return Metrics(cost_usd=cost, tokens=tokens, turns=None)  # turns filled by caller from span count
+    # turns filled by caller from span count
+    return Metrics(cost_usd=cost, tokens=tokens, turns=None)
 
 
 def _grep_float(text: str, pat: str) -> float | None:
