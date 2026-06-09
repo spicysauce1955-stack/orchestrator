@@ -34,10 +34,10 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-# The benchmark's task-surface fixtures are the experiment payload handed verbatim
-# to contestant agents (and the held-out grader): they must stay byte-stable to the
-# spec, so they are not linted as orchestrator source.
-extend-exclude = ["bench/task_template", "bench/reference", "bench/tests_hidden"]
+# The benchmark's per-task fixtures (template/ reference/ tests_hidden/) are the
+# experiment payload handed verbatim to contestant agents and the held-out grader:
+# they must stay byte-stable to the spec, so they are not linted as orchestrator source.
+extend-exclude = ["bench/tasks", "bench/results"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

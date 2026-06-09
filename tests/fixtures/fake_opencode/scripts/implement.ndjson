@@ -1,5 +1,5 @@
-{"type":"step_start","sessionID":"oc-impl-1","timestamp":1}
-{"type":"text","text":"Implementing. "}
-{"type":"tool_use","tool":"edit","id":"t1","input":{"path":"feature.py"}}
-{"type":"text","text":"Implemented the feature."}
-{"type":"step_finish","cost":0.006,"tokens":150}
+{"type":"step_start","sessionID":"oc-impl-1","timestamp":1,"part":{"type":"step-start"}}
+{"type":"text","sessionID":"oc-impl-1","part":{"type":"text","text":"Implementing. "}}
+{"type":"tool_use","sessionID":"oc-impl-1","part":{"type":"tool","tool":"edit","callID":"t1","state":{"status":"completed","input":{"filePath":"feature.py"}}}}
+{"type":"text","sessionID":"oc-impl-1","part":{"type":"text","text":"Implemented the feature."}}
+{"type":"step_finish","sessionID":"oc-impl-1","part":{"type":"step-finish","cost":0.006,"tokens":{"total":150}}}

@@ -37,6 +37,46 @@ def _cell(v) -> str:
     return "—" if v is None else (f"{v:.2f}" if isinstance(v, float) else str(v))
 
 
+def render_multitask_scorecard(tasks, names, results) -> str:
+    """Aggregate pass@1 matrix across tasks × contestants.
+
+    `results` maps (task, name) -> (Outcome, kind). Integrity is transcript-based
+    (peek heuristics); cost/wall are summed across tasks per contestant.
+    """
+    n = len(tasks)
+    lines = [
+        "# Multi-Task Benchmark Scorecard",
+        "",
+        "| Contestant | " + " | ".join(tasks) + " | pass@1 | Σ cost $ | Σ wall s | integrity |",
+        "|" + "---|" * (n + 5),
+    ]
+    for name in names:
+        cells, npass, cost_sum, has_cost, wall_sum, flags = [], 0, 0.0, False, 0.0, set()
+        for task in tasks:
+            o, _kind = results[(task, name)]
+            cells.append("✅" if o.grade.passed else "❌")
+            npass += 1 if o.grade.passed else 0
+            if o.metrics.cost_usd is not None:
+                cost_sum += o.metrics.cost_usd
+                has_cost = True
+            wall_sum += o.wall_s
+            flags.update(integrity_flags(o.transcript))
+        cost_cell = f"{cost_sum:.2f}" if has_cost else "—"
+        integ = "ok" if not flags else "⚠ " + "; ".join(sorted(flags))
+        lines.append(
+            f"| {name} | " + " | ".join(cells)
+            + f" | {npass}/{n} | {cost_cell} | {wall_sum:.0f} | {integ} |"
+        )
+    lines += ["", "## Per-task hidden-test detail (passed/failed)", "",
+              "| Task | " + " | ".join(names) + " |", "|" + "---|" * (len(names) + 1)]
+    for task in tasks:
+        detail = [f"{results[(task, nm)][0].grade.n_passed}p/"
+                  f"{results[(task, nm)][0].grade.failed}f" for nm in names]
+        lines.append(f"| {task} | " + " | ".join(detail) + " |")
+    lines += ["", "## Verdict", "", "(fill in after reading diffs)", ""]
+    return "\n".join(lines)
+
+
 def render_scorecard(rows: list[Row], *, task: str, verdict: str) -> str:
     lines = [
         f"# Benchmark Scorecard — `{task}`",

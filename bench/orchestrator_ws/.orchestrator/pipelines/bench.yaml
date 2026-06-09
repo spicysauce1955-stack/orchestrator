@@ -10,13 +10,13 @@ steps:
     type: task
     prompt: |
       Read the task in README.md (the user task is: {{task}}). Produce a short,
-      concrete implementation plan for ttl_cache.py. Output only the plan.
+      concrete implementation plan for the stub module in this repo. Output only the plan.
 
   - id: implement
     role: implementer
     needs: [plan]
     prompt: |
-      Implement ttl_cache.py to satisfy README.md. Plan:
+      Implement the stub module in this repo to satisfy README.md. Plan:
       {{plan.output}}
       Run `uv run --with pytest pytest -q` until the smoke tests pass. Implement the
       FULL contract described in README.md, not only the smoke tests.
@@ -29,15 +29,15 @@ steps:
     on_reject: implement
     output_schema: { verdict: "enum[approve,reject]" }
     prompt: |
-      Review the implementation below against README.md for correctness and
-      completeness of the full contract (LRU recency on get/set, capacity eviction +
-      overwrite-no-evict, TTL lazy expiry, the four stats counters, capacity=0). The
+      Review the implementation below against the full contract described in README.md
+      (every rule, including the edge cases and any input validation it specifies). The
       implementer's diff:
 
       {{implement.diff}}
 
-      Approve if it correctly implements the contract; reject only for real defects.
-      Reply with a JSON object {"verdict": "approve"} or {"verdict": "reject"}.
+      Approve if it correctly and completely implements the contract; reject only for
+      real defects (missing rules, wrong edge-case handling). Reply with a JSON object
+      {"verdict": "approve"} or {"verdict": "reject"}.
 
   - id: merge
     type: task

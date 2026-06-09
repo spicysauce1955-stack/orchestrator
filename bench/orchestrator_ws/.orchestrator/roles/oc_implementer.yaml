@@ -1,0 +1,3 @@
+harness: opencode
+model: ollama/glm-5.1:cloud
+permissions: edit
