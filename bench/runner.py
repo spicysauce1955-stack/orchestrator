@@ -110,8 +110,13 @@ def agent_claude(repo: Path) -> str:
 
 
 def agent_codex(repo: Path) -> str:
+    # codex's -s workspace-write sandbox uses bubblewrap, which fails to initialize in
+    # this externally-isolated environment (bwrap loopback RTM_NEWADDR). Each contestant
+    # already runs in its own throwaway git repo, so we bypass codex's own sandbox.
+    # (Fairness caveat: this also grants codex shell/network its sandboxed peers lack.)
     proc = subprocess.run(
-        ["codex", "exec", "-C", str(repo), "-s", "workspace-write", "--json", _prompt()],
+        ["codex", "exec", "-C", str(repo), "--dangerously-bypass-approvals-and-sandbox",
+         "--json", _prompt()],
         cwd=repo, capture_output=True, text=True, timeout=600,
     )
     return proc.stdout + proc.stderr

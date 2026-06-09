@@ -1,5 +1,5 @@
-{"type":"step_start","sessionID":"oc-default-1","timestamp":1}
-{"type":"text","text":"Working. "}
-{"type":"tool_use","tool":"read","id":"t1","input":{"path":"README.md"}}
-{"type":"text","text":"Done."}
-{"type":"step_finish","cost":0.003,"tokens":80}
+{"type":"step_start","sessionID":"oc-default-1","timestamp":1,"part":{"type":"step-start"}}
+{"type":"text","sessionID":"oc-default-1","part":{"type":"text","text":"Working. "}}
+{"type":"tool_use","sessionID":"oc-default-1","part":{"type":"tool","tool":"read","callID":"t1","state":{"status":"completed","input":{"filePath":"README.md"}}}}
+{"type":"text","sessionID":"oc-default-1","part":{"type":"text","text":"Done."}}
+{"type":"step_finish","sessionID":"oc-default-1","part":{"type":"step-finish","cost":0.003,"tokens":{"total":80}}}

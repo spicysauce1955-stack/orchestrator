@@ -53,29 +53,41 @@ def parse_opencode_line(obj: dict, tool_names: dict[str, str]) -> list[Event]:
     which the adapter does not currently surface as completed ToolCalls.
     """
     kind = obj.get("type")
+    # Real opencode nests the payload under `part`; the event's top level carries
+    # only `type`/`sessionID`/`timestamp`. (The fakes mirror this shape.)
+    part = obj.get("part") or {}
 
     if kind == "step_start":
         return [SessionStarted(obj.get("sessionID", ""))]
 
     if kind == "text":
-        return [MessageChunk(obj.get("text", ""))]
+        return [MessageChunk(part.get("text", ""))]
 
     if kind == "tool_use":
-        name = obj.get("tool", "") or obj.get("name", "")
-        tool_id = obj.get("id", "")
+        name = part.get("tool", "") or part.get("name", "")
+        tool_id = part.get("callID", "") or part.get("id", "")
         if tool_id:
             tool_names[tool_id] = name
-        events: list[Event] = [ToolCall(name, "in_progress")]
+        state = part.get("state") or {}
+        status = state.get("status") or "in_progress"
+        events: list[Event] = [ToolCall(name, status)]
         if name in _EDIT_TOOLS:
-            path = (obj.get("input", {}) or {}).get("path", "") or (
-                obj.get("input", {}) or {}
-            ).get("file_path", "")
+            inp = state.get("input") or {}
+            path = inp.get("filePath") or inp.get("path") or inp.get("file_path") or ""
             if path:
                 events.append(FileEdit(path, _EDIT_TOOLS[name]))
         return events
 
     if kind == "step_finish":
-        return [Cost(usd=float(obj.get("cost", 0.0)), tokens=int(obj.get("tokens", 0)))]
+        cost = float(part.get("cost", 0.0) or 0.0)
+        raw_tokens = part.get("tokens", 0)
+        # Real opencode reports tokens as a dict {total,input,output,...}; the
+        # fakes (and older shapes) may use a flat int.
+        if isinstance(raw_tokens, dict):
+            tokens = int(raw_tokens.get("total", 0) or 0)
+        else:
+            tokens = int(raw_tokens or 0)
+        return [Cost(usd=cost, tokens=tokens)]
 
     return []
 
@@ -201,8 +213,19 @@ class OpenCodeCLIAdapter:
             cwd=str(sess.cwd),
             env=env,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
+        # Drain stderr concurrently (--print-logs writes there) so a chatty child
+        # never blocks on a full pipe and a non-zero exit can report its cause.
+        stderr_chunks: list[bytes] = []
+
+        async def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            data = await proc.stderr.read()
+            if data:
+                stderr_chunks.append(data)
+
+        stderr_task = asyncio.ensure_future(_drain_stderr())
         tool_names: dict[str, str] = {}
         text_parts: list[str] = []
         assert proc.stdout is not None
@@ -221,8 +244,16 @@ class OpenCodeCLIAdapter:
                     text_parts.append(ev.text)
                 yield ev
         returncode = await proc.wait()
+        await stderr_task
         # OpenCode has no single "result" event; synthesize Done at stream end.
-        yield Done(result="".join(text_parts), is_error=(returncode != 0))
+        if returncode != 0:
+            tail = b"".join(stderr_chunks).decode(errors="replace").strip()
+            result = "".join(text_parts)
+            if tail:
+                result = f"{result}\n[opencode exited {returncode}: {tail[-500:]}]".strip()
+            yield Done(result=result, is_error=True)
+        else:
+            yield Done(result="".join(text_parts), is_error=False)
 
     async def resume(self, session: SessionId) -> SessionId:
         return session
