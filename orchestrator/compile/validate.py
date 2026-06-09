@@ -116,10 +116,15 @@ def validate_typed_io(pipeline: Pipeline) -> list[str]:
                     f"step (add '{head}' to needs)"
                 )
                 continue
-            if parts[1] != "output":
+            if parts[1] not in ("output", "diff"):
                 errors.append(
-                    f"step '{step.id}': reference {{{{{token}}}}} must use '.output' "
+                    f"step '{step.id}': reference {{{{{token}}}}} must use '.output' or '.diff' "
                     f"(got '.{parts[1]}')"
+                )
+                continue
+            if parts[1] == "diff" and len(parts) != 2:
+                errors.append(
+                    f"step '{step.id}': reference {{{{{token}}}}} '.diff' takes no field"
                 )
                 continue
             if len(parts) > 3:

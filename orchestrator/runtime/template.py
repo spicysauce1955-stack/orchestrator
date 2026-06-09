@@ -1,7 +1,9 @@
 """Runtime prompt templating (spec §4 typed I/O). Syntax: {{ ... }}.
 
-Resolves {{name}} (pipeline input), {{step.output}} (prior step text), and
-{{step.output.field}} (field of a prior step's structured output_data).
+Resolves {{name}} (pipeline input), {{step.output}} (prior step text),
+{{step.output.field}} (field of a prior step's structured output_data), and
+{{step.diff}} (a prior agent step's captured diff — lets a downstream reviewer
+see the actual code change despite per-step worktree isolation).
 Prose containing angle brackets (List<T>) is never a reference.
 """
 
@@ -33,11 +35,15 @@ def render_template(
 
         if head not in artifacts:
             raise TemplateError(f"reference {{{{{token}}}}} targets unknown step '{head}'")
-        if parts[1] != "output":
+        if parts[1] not in ("output", "diff"):
             raise TemplateError(
-                f"reference {{{{{token}}}}} must use '.output' (got '.{parts[1]}')"
+                f"reference {{{{{token}}}}} must use '.output' or '.diff' (got '.{parts[1]}')"
             )
         artifact = artifacts[head]
+        if parts[1] == "diff":
+            if len(parts) != 2:
+                raise TemplateError(f"reference {{{{{token}}}}} '.diff' takes no field")
+            return artifact.diff
         if len(parts) == 2:
             return artifact.output
         if len(parts) == 3:

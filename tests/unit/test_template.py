@@ -6,7 +6,7 @@ from orchestrator.runtime.template import TemplateError, render_template
 
 def _arts():
     return {
-        "plan": Artifact("plan", "THE PLAN", "", "b", 0.0, 0, False),
+        "plan": Artifact("plan", "THE PLAN", "THE DIFF", "b", 0.0, 0, False),
         "classify": Artifact(
             "classify", '{"kind":"feature"}', "", "b", 0.0, 0, False,
             output_data={"kind": "feature"},
@@ -47,9 +47,19 @@ def test_unknown_step_raises():
         render_template("{{ghost.output}}", {}, _arts())
 
 
+def test_step_diff_substitution():
+    out = render_template("Changes:\n{{plan.diff}}", {}, _arts())
+    assert out == "Changes:\nTHE DIFF"
+
+
+def test_diff_with_field_raises():
+    with pytest.raises(TemplateError):
+        render_template("{{plan.diff.x}}", {}, _arts())
+
+
 def test_non_output_segment_raises():
     with pytest.raises(TemplateError):
-        render_template("{{plan.diff}}", {}, _arts())
+        render_template("{{plan.bogus}}", {}, _arts())
 
 
 def test_missing_field_raises():
