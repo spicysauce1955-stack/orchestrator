@@ -54,6 +54,8 @@ async def test_adapter_passes_prompt_and_stream_flag(fake_env, tmp_path):
     assert "-p" in argv
     assert "--output-format" in argv
     assert "stream-json" in argv
+    # Real `claude -p` rejects --output-format=stream-json without --verbose.
+    assert "--verbose" in argv
     assert "hello prompt" in argv
 
 
