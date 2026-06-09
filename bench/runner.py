@@ -119,7 +119,6 @@ def agent_codex(repo: Path) -> str:
 
 def agent_orchestrator(repo: Path) -> str:
     ws = BENCH / "orchestrator_ws" / ".orchestrator"
-    run_id = "bench" + str(int(time.monotonic()))
     env = dict(os.environ)
     env["ORCH_CLAUDE_BIN"] = "claude"
     env["ORCH_SPAN_DB"] = str(repo.parent / "spans.sqlite")
@@ -128,8 +127,21 @@ def agent_orchestrator(repo: Path) -> str:
          "--task", "implement TtlCache per README.md", "--root", str(ws), "--repo", str(repo)],
         cwd=repo, capture_output=True, text=True, env=env, timeout=900,
     )
+    transcript = proc.stdout + proc.stderr
+    # Agent steps run in isolated worktrees (then torn down); the governed pipeline
+    # lands its approved result on the integration branch orch/<run_id>/merge. Parse
+    # the real run id from the CLI banner and check that branch's solution into the
+    # repo so grade() evaluates what the orchestrator actually produced. A failed run
+    # (no merge / non-approve) leaves no branch → the stub is graded (a non-pass).
+    m = re.search(r"run ([0-9a-f]+):", transcript)
+    run_id = m.group(1) if m else ""
     (repo.parent / "orch_run_id.txt").write_text(run_id)
-    return proc.stdout + proc.stderr
+    if run_id:
+        subprocess.run(
+            ["git", "checkout", f"orch/{run_id}/merge", "--", "ttl_cache.py"],
+            cwd=repo, capture_output=True, text=True,
+        )
+    return transcript
 
 
 def main() -> None:

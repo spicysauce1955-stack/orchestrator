@@ -1,4 +1,8 @@
-# Real-claude bench pipeline: plan (task) -> implement -> review (reject -> implement).
+# Real-claude bench pipeline: plan (task) -> implement -> review (reject -> implement)
+# -> merge. NO HITL gate (the benchmark runs non-interactively); merge lands the
+# approved solution on the integration branch orch/<run_id>/merge, which the runner
+# checks out to grade. Agent steps run in isolated worktrees, so merge is how the
+# governed pipeline's result reaches the contestant repo.
 mode: declarative
 inputs: { task: string }
 steps:
@@ -28,3 +32,8 @@ steps:
       Review ttl_cache.py against README.md for correctness and completeness of the
       full contract (LRU, TTL lazy expiry, stats counters, capacity=0). Reply with a
       JSON object {"verdict": "approve"} or {"verdict": "reject"}.
+
+  - id: merge
+    type: task
+    needs: [review]
+    merge_strategy: sequential-rebase
