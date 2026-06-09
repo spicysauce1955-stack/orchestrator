@@ -6,6 +6,24 @@ import json
 import re
 
 _ENUM_RE = re.compile(r"enum\[([^\]]*)\]")
+_JSON_OBJ_RE = re.compile(r"\{[^{}]*\}")
+
+
+def _extract_json_object(text: str) -> dict | None:
+    """Best-effort: pull the last flat JSON object out of prose/markdown.
+
+    Real harnesses wrap structured output in explanatory text or ```json fences,
+    so a whole-string json.loads fails. Scan for `{...}` candidates and return the
+    last one that parses to a dict (models tend to conclude with their answer).
+    """
+    for candidate in reversed(_JSON_OBJ_RE.findall(text)):
+        try:
+            loaded = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(loaded, dict):
+            return loaded
+    return None
 
 
 class Verdict:
@@ -32,6 +50,8 @@ def parse_output(output: str, output_schema: dict | None) -> tuple[dict | None, 
             data = loaded
     except (json.JSONDecodeError, TypeError):
         data = None
+    if data is None:
+        data = _extract_json_object(output)
 
     for field_name, spec in output_schema.items():
         allowed = None

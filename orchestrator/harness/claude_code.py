@@ -160,7 +160,8 @@ class ClaudeCodeCLIAdapter:
         flags = self.translate(sess.caps, cwd=sess.cwd, extra_allowed_tools=extra_tools)
         mcp_flags = ["--mcp-config", sess.mcp_config_path] if sess.mcp_config_path else []
         model_flags = ["--model", sess.model] if sess.model else []
-        cmd = [*self._binary, "-p", text, "--output-format", "stream-json",
+        # `claude -p` rejects --output-format=stream-json unless --verbose is set.
+        cmd = [*self._binary, "-p", text, "--output-format", "stream-json", "--verbose",
                *flags, *mcp_flags, *model_flags]
         return self._stream(session, cmd)
 
@@ -170,8 +171,20 @@ class ClaudeCodeCLIAdapter:
             *cmd,
             cwd=str(sess.cwd),
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
+        # Drain stderr concurrently so a chatty child never blocks on a full pipe,
+        # and so a non-zero exit can report *why* (the deferred M2 follow-up).
+        stderr_chunks: list[bytes] = []
+
+        async def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            # read() (not line iteration) — stderr may be huge and newline-free.
+            data = await proc.stderr.read()
+            if data:
+                stderr_chunks.append(data)
+
+        stderr_task = asyncio.ensure_future(_drain_stderr())
         tool_names: dict[str, str] = {}
         saw_done = False
         assert proc.stdout is not None
@@ -190,9 +203,15 @@ class ClaudeCodeCLIAdapter:
                     saw_done = True
                 yield ev
         returncode = await proc.wait()
+        await stderr_task
         if returncode != 0:
             # A non-zero harness exit is a failure regardless of streamed result.
-            yield Done(result=f"harness exited {returncode}", is_error=True)
+            # Surface the stderr tail so the cause is diagnosable.
+            tail = b"".join(stderr_chunks).decode(errors="replace").strip()
+            msg = f"harness exited {returncode}"
+            if tail:
+                msg += f": {tail[-500:]}"
+            yield Done(result=msg, is_error=True)
         elif not saw_done:
             yield Done(result="", is_error=True)
 
