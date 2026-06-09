@@ -15,7 +15,10 @@ class Row:
     quality: str = ""
 
 
-_PEEK_MARKERS = ("tests_hidden", "_hidden/", "held-out", "hidden test")
+# Only the held-out test *paths* are real peek signals. The phrase "hidden test"
+# appears in the task README itself ("graded by a larger hidden test suite"), so
+# matching it flags every contestant that merely echoes the prompt (false positive).
+_PEEK_MARKERS = ("tests_hidden", "_hidden/")
 
 
 def integrity_flags(transcript: str, *, diff: str = "") -> list[str]:
