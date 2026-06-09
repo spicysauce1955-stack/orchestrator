@@ -23,8 +23,17 @@ DEFAULT_RESULTS = BENCH / "results"
 
 
 def task_names() -> list[str]:
-    """All task names (a dir under tasks/ with a template/)."""
-    return sorted(p.name for p in TASKS_DIR.iterdir() if (p / "template").is_dir())
+    """Task names to run (a dir under tasks/ with a template/).
+
+    Honors $ORCH_BENCH_TASKS (comma-separated) to run a subset — e.g. only the
+    harder tasks — without moving files. Unknown names are ignored.
+    """
+    all_tasks = sorted(p.name for p in TASKS_DIR.iterdir() if (p / "template").is_dir())
+    subset = os.environ.get("ORCH_BENCH_TASKS", "").strip()
+    if subset:
+        wanted = [t.strip() for t in subset.split(",") if t.strip()]
+        return [t for t in wanted if t in all_tasks]
+    return all_tasks
 
 
 def template_dir(task: str) -> Path:
