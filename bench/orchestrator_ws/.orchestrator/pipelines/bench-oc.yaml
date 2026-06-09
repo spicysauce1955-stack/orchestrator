@@ -1,0 +1,21 @@
+# OpenCode-adapter de-risk pipeline: a single opencode implement step then merge.
+# Proves the orchestrator drives the REAL opencode binary end-to-end (caps -> permission
+# config -> worktree -> diff capture -> merge). No review (claude's review loop is
+# validated separately); merge with no review verdict proceeds.
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: implement
+    role: oc_implementer
+    prompt: |
+      Implement ttl_cache.py to satisfy README.md (the task: {{task}}). Implement the
+      full contract: LRU recency on get/set, capacity eviction with overwrite-no-evict,
+      per-key TTL with lazy expiry, the four stats counters, and capacity=0. Run
+      `uv run --with pytest pytest -q` until the smoke tests in tests/ pass.
+    success_criteria: "uv run --with pytest pytest -q tests/"
+    max_retries: 1
+
+  - id: merge
+    type: task
+    needs: [implement]
+    merge_strategy: sequential-rebase
