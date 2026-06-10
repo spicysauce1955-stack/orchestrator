@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from orchestrator.harness._proc import reap
 from orchestrator.harness.adapter import McpServer, SessionId
 from orchestrator.harness.events import (
     Cost,
@@ -110,6 +111,7 @@ class _CodexSession:
     mcp_servers: list[McpServer]
     model: str | None = None
     harness_session_id: str | None = None
+    proc: asyncio.subprocess.Process | None = None
 
 
 class CodexCLIAdapter:
@@ -185,45 +187,51 @@ class CodexCLIAdapter:
                 stderr_chunks.append(data)
 
         stderr_task = asyncio.ensure_future(_drain_stderr())
+        sess.proc = proc
         items: dict[str, str] = {}
         text_parts: list[str] = []
         error_msgs: list[str] = []
         assert proc.stdout is not None
-        async for raw in proc.stdout:
-            line = raw.decode().strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            # Error items are non-events (codex emits non-fatal ones every
-            # run); remember them in case the process exits non-zero.
-            item = obj.get("item") or {}
-            if obj.get("type") == "item.completed" and item.get("type") == "error":
-                error_msgs.append(item.get("message", ""))
-            for ev in parse_codex_line(obj, items):
-                if isinstance(ev, SessionStarted):
-                    sess.harness_session_id = ev.session_id
-                if isinstance(ev, MessageChunk):
-                    text_parts.append(ev.text)
-                yield ev
-        returncode = await proc.wait()
-        await stderr_task
-        # Codex has no single "result" event; synthesize Done at stream end.
-        if returncode != 0:
-            tail = b"".join(stderr_chunks).decode(errors="replace").strip()
-            # Last two error items only: codex can emit several per run; cap to
-            # keep the failure message readable.
-            detail = "; ".join(filter(None, [*error_msgs[-2:], tail[-500:] if tail else ""]))
-            result = "".join(text_parts)
-            suffix = f": {detail}" if detail else ""
-            yield Done(
-                result=f"{result}\n[codex exited {returncode}{suffix}]".strip(),
-                is_error=True,
-            )
-        else:
-            yield Done(result="".join(text_parts), is_error=False)
+        try:
+            async for raw in proc.stdout:
+                line = raw.decode().strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # Error items are non-events (codex emits non-fatal ones every
+                # run); remember them in case the process exits non-zero.
+                item = obj.get("item") or {}
+                if obj.get("type") == "item.completed" and item.get("type") == "error":
+                    error_msgs.append(item.get("message", ""))
+                for ev in parse_codex_line(obj, items):
+                    if isinstance(ev, SessionStarted):
+                        sess.harness_session_id = ev.session_id
+                    if isinstance(ev, MessageChunk):
+                        text_parts.append(ev.text)
+                    yield ev
+            returncode = await proc.wait()
+            await stderr_task
+            # Codex has no single "result" event; synthesize Done at stream end.
+            if returncode != 0:
+                tail = b"".join(stderr_chunks).decode(errors="replace").strip()
+                # Last two error items only: codex can emit several per run; cap to
+                # keep the failure message readable.
+                detail = "; ".join(filter(None, [*error_msgs[-2:], tail[-500:] if tail else ""]))
+                result = "".join(text_parts)
+                suffix = f": {detail}" if detail else ""
+                yield Done(
+                    result=f"{result}\n[codex exited {returncode}{suffix}]".strip(),
+                    is_error=True,
+                )
+            else:
+                yield Done(result="".join(text_parts), is_error=False)
+        finally:
+            # Abandonment (GeneratorExit at a yield / consumer cancellation):
+            # kill + reap so the child and drain task never outlive the stream.
+            await reap(proc, stderr_task)
 
     async def resume(self, session: SessionId) -> SessionId:
         # Codex-native resume/fork deferred (spec: out of scope); the handle
@@ -231,4 +239,8 @@ class CodexCLIAdapter:
         return session
 
     async def cancel(self, session: SessionId) -> None:
-        self._sessions.pop(session, None)
+        sess = self._sessions.pop(session, None)
+        if sess is not None and sess.proc is not None:
+            # A timeout/budget kill path may cancel mid-prompt: take the child
+            # down with the session instead of leaving it running detached.
+            await reap(sess.proc)

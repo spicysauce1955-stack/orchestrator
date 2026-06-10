@@ -97,3 +97,31 @@ def test_write_only_grant_builds_server_with_empty_sources(tmp_path):
     assert srv.env["ORCH_KB_WRITE_TARGET"] == str(
         tmp_path / ".orchestrator/knowledge/lessons.md"
     )
+
+
+# --- span-context threading (M6d follow-up: cross-process MCP spans) ---
+
+
+def test_active_span_threads_trace_context_env(tmp_path, monkeypatch):
+    from orchestrator.observability.spans import configure_tracing, get_tracer
+    from orchestrator.observability.store import SqliteSpanExporter
+
+    monkeypatch.delenv("ORCH_SPAN_DB", raising=False)
+    configure_tracing(exporter=SqliteSpanExporter(tmp_path / "sink.sqlite"))
+    caps = ResolvedCaps(knowledge_read=("repo-conventions",))
+    with get_tracer().start_as_current_span("step") as span:
+        [srv] = build_knowledge_mcp(_ws(), caps, tmp_path, step_id="audit")
+        ctx = span.get_span_context()
+    assert srv.env["ORCH_SPAN_DB"] == str(tmp_path / ".orch" / "spans.sqlite")
+    assert srv.env["ORCH_SPAN_TRACE"] == format(ctx.trace_id, "032x")
+    assert srv.env["ORCH_SPAN_PARENT"] == format(ctx.span_id, "016x")
+    assert srv.env["ORCH_KB_STEP"] == "audit"
+
+
+def test_no_active_span_omits_trace_env(tmp_path):
+    caps = ResolvedCaps(knowledge_read=("repo-conventions",))
+    [srv] = build_knowledge_mcp(_ws(), caps, tmp_path)
+    assert "ORCH_SPAN_DB" not in srv.env
+    assert "ORCH_SPAN_TRACE" not in srv.env
+    assert "ORCH_SPAN_PARENT" not in srv.env
+    assert "ORCH_KB_STEP" not in srv.env

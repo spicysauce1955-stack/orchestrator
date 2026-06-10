@@ -14,9 +14,12 @@ import shutil
 import sys
 from pathlib import Path
 
+from opentelemetry import trace
+
 from orchestrator.config.loader import Workspace
 from orchestrator.config.schemas import CoreKnowledge
 from orchestrator.harness.adapter import McpServer
+from orchestrator.observability.store import span_db_path
 from orchestrator.safety.capabilities import ResolvedCaps
 
 
@@ -41,10 +44,15 @@ def inject_core(core: CoreKnowledge | None, root: Path, dest: Path) -> list[str]
 
 
 def build_knowledge_mcp(
-    workspace: Workspace, caps: ResolvedCaps, root: Path
+    workspace: Workspace, caps: ResolvedCaps, root: Path, *, step_id: str = ""
 ) -> list[McpServer]:
     """ResolvedCaps knowledge grants -> an McpServer (or none). Deny-wins gating:
-    the write target is set ONLY when `caps.knowledge_write` is non-empty."""
+    the write target is set ONLY when `caps.knowledge_write` is non-empty.
+
+    Called inside the step span: the active trace context is threaded to the
+    server via env so its mcp.call / knowledge.write spans land in the run's
+    trace in the span store (the server is a harness-spawned subprocess and
+    cannot share our OTel provider)."""
     if not caps.knowledge_read and not caps.knowledge_write:
         return []
 
@@ -68,6 +76,13 @@ def build_knowledge_mcp(
             else ".orchestrator/knowledge/lessons.md"
         )
         env["ORCH_KB_WRITE_TARGET"] = str(root / target_rel)
+
+    ctx = trace.get_current_span().get_span_context()
+    if ctx.is_valid:
+        env["ORCH_SPAN_DB"] = str(span_db_path(root))
+        env["ORCH_SPAN_TRACE"] = format(ctx.trace_id, "032x")
+        env["ORCH_SPAN_PARENT"] = format(ctx.span_id, "016x")
+        env["ORCH_KB_STEP"] = step_id
 
     return [McpServer(
         name="knowledge",

@@ -17,6 +17,9 @@ SPAN_SESSION = "harness.session"
 SPAN_TOOL_CALL = "tool_call"
 SPAN_FILE_EDIT = "file_edit"
 SPAN_MESSAGE = "message"
+# Emitted by the knowledge MCP server subprocess (row-written, not OTel-exported).
+SPAN_MCP_CALL = "mcp.call"
+SPAN_KNOWLEDGE_WRITE = "knowledge.write"
 
 _TRACER_NAME = "orchestrator"
 

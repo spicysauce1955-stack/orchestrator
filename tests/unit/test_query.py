@@ -168,3 +168,32 @@ def test_run_status_terminal_status_is_the_last_trace(tmp_path: Path) -> None:
     view = run_status(db, "r11")
     assert view is not None
     assert view.status == "rejected"
+
+
+def test_run_messages_surfaces_knowledge_write_spans(tmp_path: Path) -> None:
+    from orchestrator.observability.query import MessageView
+    from orchestrator.observability.spans import SPAN_KNOWLEDGE_WRITE
+
+    db = tmp_path / "spans.sqlite"
+    configure_tracing(exporter=SqliteSpanExporter(db))
+    tracer = get_tracer()
+    with tracer.start_as_current_span(SPAN_RUN) as run:
+        run.set_attribute("run.id", "r3")
+        run.set_attribute("pipeline", "full")
+        with tracer.start_as_current_span(SPAN_MESSAGE) as m:
+            m.set_attribute("msg.from", "orchestrator")
+            m.set_attribute("msg.to", "implement")
+            m.set_attribute("msg.kind", "classify")
+            m.set_attribute("msg.body", "feature")
+        with tracer.start_as_current_span(SPAN_KNOWLEDGE_WRITE) as k:
+            k.set_attribute("step.id", "audit")
+            k.set_attribute("kb.target", "lessons.md")
+            k.set_attribute("kb.lesson", "always pin deps")
+
+    msgs = run_messages(db, "r3")
+
+    # Interleaved with bus messages in time order; rendered as MessageViews.
+    assert msgs == [
+        MessageView(frm="orchestrator", to="implement", kind="classify", body="feature"),
+        MessageView(frm="audit", to="lessons.md", kind="knowledge.write", body="always pin deps"),
+    ]
