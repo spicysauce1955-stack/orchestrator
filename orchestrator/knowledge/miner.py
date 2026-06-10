@@ -68,11 +68,48 @@ def _step_failures(conn: sqlite3.Connection, traces: dict[str, str], min_runs: i
         )
 
 
+def _repeated_rejections(conn: sqlite3.Connection, traces: dict[str, str], min_runs: int):
+    grouped: dict[str, dict] = {}
+    rows = conn.execute(
+        "SELECT trace_id, attrs, start_ns FROM spans "
+        "WHERE name = 'message' AND json_extract(attrs, '$.\"msg.kind\"') = 'verdict' "
+        "ORDER BY start_ns"
+    )
+    for trace_id, raw, _start in rows:
+        run = traces.get(str(trace_id))
+        if run is None:
+            continue
+        attrs = json.loads(raw)
+        step = str(attrs.get("msg.to", ""))
+        g = grouped.setdefault(step, {"runs": set(), "count": 0, "last": ""})
+        g["runs"].add(run)
+        g["count"] += 1
+        g["last"] = str(attrs.get("msg.body", ""))  # rows are time-ordered
+    for step, g in grouped.items():
+        if len(g["runs"]) < min_runs:
+            continue
+        runs = tuple(sorted(g["runs"]))
+        yield Candidate(
+            kind="repeated_rejection",
+            subject=step,
+            runs=runs,
+            count=g["count"],
+            text=(
+                f"Review rejected step '{step}' {g['count']} time(s) across "
+                f"{len(runs)} runs ({', '.join(runs)}) — a systematic gap, not a "
+                f"one-off. Latest feedback: {g['last'][:200]}"
+            ),
+        )
+
+
 def mine(span_db: Path, *, min_runs: int = 2) -> list[Candidate]:
     """Patterns repeated in >= `min_runs` distinct runs, most-evidenced first."""
     with contextlib.closing(connect(span_db)) as conn:
         traces = _trace_runs(conn)
-        cands = list(_step_failures(conn, traces, min_runs))
+        cands = [
+            *_step_failures(conn, traces, min_runs),
+            *_repeated_rejections(conn, traces, min_runs),
+        ]
     cands.sort(key=lambda c: (-c.count, c.kind, c.subject))
     return cands
 

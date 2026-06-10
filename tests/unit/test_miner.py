@@ -76,3 +76,48 @@ def test_no_failures_no_candidates(tmp_path: Path) -> None:
     _step(db, t1, "implement", is_error=False)
 
     assert mine(db) == []
+
+
+def _verdict(db: Path, trace: str, to_step: str, body: str, start_ns: int = 0) -> None:
+    _insert(
+        db, trace, "message",
+        {"msg.from": "orchestrator", "msg.to": to_step, "msg.kind": "verdict", "msg.body": body},
+        start_ns=start_ns,
+    )
+
+
+def test_repeated_rejection_across_runs(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    _verdict(db, t1, "implement", "missing tests", start_ns=10)
+    _verdict(db, t1, "implement", "still missing tests", start_ns=20)
+    _verdict(db, t2, "implement", "edge case unhandled", start_ns=30)
+
+    cands = mine(db)
+
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.kind == "repeated_rejection"
+    assert c.subject == "implement"
+    assert set(c.runs) == {"r1", "r2"}
+    assert c.count == 3
+    assert "edge case unhandled" in c.text  # latest feedback surfaced
+
+
+def test_rejections_in_single_run_ignored(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1 = _seed_run(db, "r1")
+    _verdict(db, t1, "implement", "nope", start_ns=10)
+    _verdict(db, t1, "implement", "still nope", start_ns=20)
+
+    assert mine(db) == []
+
+
+def test_non_verdict_messages_ignored(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    for t in (t1, t2):
+        _insert(db, t, "message",
+                {"msg.from": "o", "msg.to": "implement", "msg.kind": "classify", "msg.body": "x"})
+
+    assert mine(db) == []
