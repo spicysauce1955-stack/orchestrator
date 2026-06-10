@@ -121,3 +121,43 @@ def test_non_verdict_messages_ignored(tmp_path: Path) -> None:
                 {"msg.from": "o", "msg.to": "implement", "msg.kind": "classify", "msg.body": "x"})
 
     assert mine(db) == []
+
+
+def test_recurring_tool_failure_across_runs(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    for t in (t1, t2):
+        _insert(db, t, "tool_call", {"tool.name": "Bash", "tool.status": "failed"})
+    _insert(db, t1, "tool_call", {"tool.name": "Edit", "tool.status": "completed"})
+
+    cands = mine(db)
+
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.kind == "recurring_tool_failure"
+    assert c.subject == "Bash"
+    assert set(c.runs) == {"r1", "r2"}
+    assert c.count == 2
+
+
+def test_recurring_mcp_failure_across_runs(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    for t in (t1, t2):
+        _insert(db, t, "mcp.call", {"mcp.tool": "write", "mcp.is_error": True, "step.id": "audit"})
+    _insert(db, t1, "mcp.call", {"mcp.tool": "search", "mcp.is_error": False, "step.id": "plan"})
+
+    cands = mine(db)
+
+    assert len(cands) == 1
+    assert cands[0].kind == "recurring_tool_failure"
+    assert cands[0].subject == "mcp:write"
+
+
+def test_single_run_tool_failure_ignored(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1 = _seed_run(db, "r1")
+    _insert(db, t1, "tool_call", {"tool.name": "Bash", "tool.status": "failed"})
+    _insert(db, t1, "tool_call", {"tool.name": "Bash", "tool.status": "failed"})
+
+    assert mine(db) == []

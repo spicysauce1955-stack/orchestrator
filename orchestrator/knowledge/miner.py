@@ -102,6 +102,49 @@ def _repeated_rejections(conn: sqlite3.Connection, traces: dict[str, str], min_r
         )
 
 
+def _tool_failures(conn: sqlite3.Connection, traces: dict[str, str], min_runs: int):
+    """Failed `tool_call` spans + errored `mcp.call` spans, normalized to one detector."""
+    grouped: dict[str, dict] = {}
+
+    def _bump(trace_id: str, tool: str) -> None:
+        run = traces.get(str(trace_id))
+        if run is None or not tool:
+            return
+        g = grouped.setdefault(tool, {"runs": set(), "count": 0})
+        g["runs"].add(run)
+        g["count"] += 1
+
+    rows = conn.execute(
+        "SELECT trace_id, attrs FROM spans "
+        "WHERE name = 'tool_call' AND json_extract(attrs, '$.\"tool.status\"') = 'failed'"
+    )
+    for trace_id, raw in rows:
+        _bump(trace_id, str(json.loads(raw).get("tool.name", "")))
+    rows = conn.execute(
+        "SELECT trace_id, attrs FROM spans "
+        "WHERE name = 'mcp.call' AND json_extract(attrs, '$.\"mcp.is_error\"')"
+    )
+    for trace_id, raw in rows:
+        tool = str(json.loads(raw).get("mcp.tool", ""))
+        _bump(trace_id, f"mcp:{tool}" if tool else "")
+
+    for tool, g in grouped.items():
+        if len(g["runs"]) < min_runs:
+            continue
+        runs = tuple(sorted(g["runs"]))
+        yield Candidate(
+            kind="recurring_tool_failure",
+            subject=tool,
+            runs=runs,
+            count=g["count"],
+            text=(
+                f"Tool '{tool}' failed {g['count']} time(s) across {len(runs)} runs "
+                f"({', '.join(runs)}). A durable lesson on avoiding or configuring it "
+                "may help."
+            ),
+        )
+
+
 def mine(span_db: Path, *, min_runs: int = 2) -> list[Candidate]:
     """Patterns repeated in >= `min_runs` distinct runs, most-evidenced first."""
     with contextlib.closing(connect(span_db)) as conn:
@@ -109,6 +152,7 @@ def mine(span_db: Path, *, min_runs: int = 2) -> list[Candidate]:
         cands = [
             *_step_failures(conn, traces, min_runs),
             *_repeated_rejections(conn, traces, min_runs),
+            *_tool_failures(conn, traces, min_runs),
         ]
     cands.sort(key=lambda c: (-c.count, c.kind, c.subject))
     return cands
