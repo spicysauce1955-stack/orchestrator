@@ -17,7 +17,11 @@ def test_knowledge_server_overrides():
         name="knowledge",
         command="/usr/bin/python3",
         args=["-m", "orchestrator.knowledge.mcp_server"],
-        env={"ORCH_KB_SOURCES": json.dumps(["a.md", "b.md"]), "ORCH_KB_ROOT": "/tmp/kb"},
+        env={
+            "ORCH_KB_SOURCES": json.dumps(["a.md", "b.md"]),
+            "ORCH_KB_ROOT": "/tmp/kb",
+            "ORCH_KB_WRITE_TARGET": "/tmp/kb/lessons.md",
+        },
     )
     flags = _mcp_overrides([srv])
     # pairwise: ["-c", "key=value", "-c", "key=value", ...]
@@ -30,6 +34,9 @@ def test_knowledge_server_overrides():
     kb_sources_val = json.dumps(json.dumps(["a.md", "b.md"]))
     assert kv[kb_sources_key] == kb_sources_val
     assert kv["mcp_servers.knowledge.env.ORCH_KB_ROOT"] == '"/tmp/kb"'
+    assert kv["mcp_servers.knowledge.env.ORCH_KB_WRITE_TARGET"] == '"/tmp/kb/lessons.md"'
+    # 1 command + 1 args + len(env) env keys, each as a ("-c", "key=value") pair
+    assert len(flags) == 2 * (2 + len(srv.env))
 
 
 def test_server_without_args_or_env_emits_command_only():
