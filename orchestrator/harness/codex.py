@@ -9,6 +9,9 @@ a temp CODEX_HOME would break auth.json.
 
 from __future__ import annotations
 
+import json
+
+from orchestrator.harness.adapter import McpServer
 from orchestrator.harness.events import (
     Cost,
     Event,
@@ -60,3 +63,22 @@ def parse_codex_line(obj: dict, items: dict[str, str]) -> list[Event]:
             ]
 
     return []
+
+
+def _mcp_overrides(servers: list[McpServer]) -> list[str]:
+    """McpServer list → `codex -c` config overrides (verified vs `codex mcp list`).
+
+    `-c` values are parsed as TOML; json.dumps of a str / list[str] is valid
+    TOML for those types. Per-key `env.<KEY>` dotted paths avoid inline-table
+    syntax. Layering on the real config preserves auth.json and the user's
+    existing servers; there is no temp file to clean up.
+    """
+    flags: list[str] = []
+    for s in servers:
+        base = f"mcp_servers.{s.name}"
+        flags += ["-c", f"{base}.command={json.dumps(s.command)}"]
+        if s.args:
+            flags += ["-c", f"{base}.args={json.dumps(list(s.args))}"]
+        for key, value in s.env.items():
+            flags += ["-c", f"{base}.env.{key}={json.dumps(value)}"]
+    return flags
