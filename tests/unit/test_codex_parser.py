@@ -134,3 +134,19 @@ def test_unknown_types_ignored():
         == []
     )
     assert parse_codex_line({}, {}) == []
+
+
+def test_unknown_file_change_kind_falls_back_to_modify():
+    evs = parse_codex_line(
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "item_9",
+                "type": "file_change",
+                "changes": [{"path": "/repo/r.py", "kind": "rename"}],
+                "status": "completed",
+            },
+        },
+        {},
+    )
+    assert evs == [FileEdit("/repo/r.py", "modify")]

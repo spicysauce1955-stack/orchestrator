@@ -205,10 +205,13 @@ class CodexCLIAdapter:
         # Codex has no single "result" event; synthesize Done at stream end.
         if returncode != 0:
             tail = b"".join(stderr_chunks).decode(errors="replace").strip()
+            # Last two error items only: codex can emit several per run; cap to
+            # keep the failure message readable.
             detail = "; ".join(filter(None, [*error_msgs[-2:], tail[-500:] if tail else ""]))
             result = "".join(text_parts)
+            suffix = f": {detail}" if detail else ""
             yield Done(
-                result=f"{result}\n[codex exited {returncode}: {detail}]".strip(),
+                result=f"{result}\n[codex exited {returncode}{suffix}]".strip(),
                 is_error=True,
             )
         else:

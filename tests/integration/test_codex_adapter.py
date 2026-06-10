@@ -100,3 +100,23 @@ async def test_honors_orch_codex_bin(monkeypatch):
     monkeypatch.setenv("ORCH_CODEX_BIN", "fakecodex --flag")
     adapter = CodexCLIAdapter()
     assert adapter._binary == ["fakecodex", "--flag"]
+
+
+async def test_nonzero_exit_without_stderr_has_clean_message(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCH_CODEX_SCRIPT", str(SCRIPTS / "implement.ndjson"))
+    monkeypatch.setenv("ORCH_CODEX_EXIT", "3")
+    adapter = CodexCLIAdapter(binary=[sys.executable, str(FAKE)])
+    _, events = await _drive(adapter, tmp_path, "x")
+    done = events[-1]
+    assert isinstance(done, Done) and done.is_error is True
+    assert "[codex exited 3]" in done.result  # no dangling ": "
+
+
+async def test_cancel_removes_session(tmp_path):
+    adapter = CodexCLIAdapter(binary=[sys.executable, str(FAKE)])
+    session = await adapter.start_session(
+        cwd=tmp_path, caps=ResolvedCaps.read_only(), mcp_servers=[]
+    )
+    assert session in adapter._sessions
+    await adapter.cancel(session)
+    assert session not in adapter._sessions
