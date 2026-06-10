@@ -13,6 +13,7 @@ from orchestrator.compile.compiler import compile_pipeline
 from orchestrator.config.loader import ConfigError, load_workspace
 from orchestrator.config.schemas import Mode, StepType
 from orchestrator.harness.registry import HarnessRegistry
+from orchestrator.knowledge import miner
 from orchestrator.observability.gc import gc_stores
 from orchestrator.observability.query import run_messages, run_metrics, run_status
 from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tracer
@@ -300,6 +301,31 @@ def gc(
     )
     for run_id in report.runs_dropped:
         typer.echo(f"  {run_id}")
+
+
+@app.command()
+def mine(
+    repo: Path = typer.Option(Path("."), "--repo", help="Repo whose .orch/ holds the span store."),
+    min_runs: int = typer.Option(
+        2, "--min-runs", help="A pattern must recur in at least this many distinct runs."
+    ),
+    out: Path | None = typer.Option(
+        None, "--out", help="Candidates file (default .orchestrator/knowledge/candidates.md)."
+    ),
+) -> None:
+    """Mine the span store for candidate lessons (spec §8.1).
+
+    Candidates are UNVETTED: the auditor role vets them and records keepers via
+    the gated knowledge write — this command never touches the knowledge base.
+    """
+    cands = miner.mine(_span_db(repo), min_runs=min_runs)
+    target = out if out is not None else repo / ".orchestrator" / "knowledge" / "candidates.md"
+    miner.write_candidates(cands, target)
+    if not cands:
+        typer.echo("no candidates mined.")
+    for c in cands:
+        typer.echo(f"  [{c.kind}] {c.text}")
+    typer.echo(f"wrote {target}")
 
 
 if __name__ == "__main__":  # pragma: no cover

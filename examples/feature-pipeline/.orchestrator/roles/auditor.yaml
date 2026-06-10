@@ -1,6 +1,7 @@
 # The only role with knowledge write access (spec §8): durable lessons.
+# Also reads `candidates` (mined by `orch mine`, spec §8.1) to vet them.
 harness: claude-code
 permissions: read-only          # auditor reads code, writes only the KB
 access:
-  knowledge: { read: ["repo-conventions", "lessons"], write: ["lessons"] }
+  knowledge: { read: ["repo-conventions", "lessons", "candidates"], write: ["lessons"] }
 knowledge: [repo-conventions]

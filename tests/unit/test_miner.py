@@ -1,0 +1,281 @@
+"""Knowledge miner (spec §8.1): repeated cross-run patterns → candidate lessons.
+
+Seeds the span store with direct row inserts (same idiom as test_gc.py) and
+asserts the deterministic detectors. The miner only ever *proposes*: writing
+lessons stays behind the auditor-gated MCP write path.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from orchestrator.knowledge.miner import Candidate, mine, write_candidates
+from orchestrator.observability.store import connect
+
+_SPAN_SEQ = 0
+
+
+def _insert(db: Path, trace: str, name: str, attrs: dict, start_ns: int = 0) -> None:
+    global _SPAN_SEQ
+    _SPAN_SEQ += 1
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO spans VALUES (?, ?, NULL, ?, ?, ?, ?)",
+            (trace, f"{_SPAN_SEQ:016d}", name, start_ns, start_ns + 1, json.dumps(attrs)),
+        )
+        conn.commit()
+
+
+def _seed_run(db: Path, run_id: str) -> str:
+    """One root `run` span; returns its trace id."""
+    trace = f"trace-{run_id}".ljust(32, "0")
+    _insert(db, trace, "run", {"run.id": run_id, "pipeline": "p"})
+    return trace
+
+
+def _step(db: Path, trace: str, step_id: str, *, is_error: bool, role: str = "r") -> None:
+    _insert(
+        db, trace, "step",
+        {"step.id": step_id, "step.role": role, "step.is_error": is_error, "step.type": "agent"},
+    )
+
+
+def test_recurring_step_failure_across_runs(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2, t3 = (_seed_run(db, r) for r in ("r1", "r2", "r3"))
+    _step(db, t1, "implement", is_error=True, role="implementer")
+    _step(db, t2, "implement", is_error=True, role="implementer")
+    _step(db, t3, "implement", is_error=False, role="implementer")
+    _step(db, t1, "plan", is_error=True)  # only one run -> below min_runs
+    _step(db, t2, "plan", is_error=False)
+
+    cands = mine(db)
+
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.kind == "recurring_step_failure"
+    assert c.subject == "implement"
+    assert set(c.runs) == {"r1", "r2"}
+    assert c.count == 2
+    assert "implement" in c.text
+
+
+def test_min_runs_threshold_filters(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    _step(db, t1, "implement", is_error=True)
+    _step(db, t2, "implement", is_error=True)
+
+    assert mine(db, min_runs=3) == []
+
+
+def test_no_failures_no_candidates(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1 = _seed_run(db, "r1")
+    _step(db, t1, "implement", is_error=False)
+
+    assert mine(db) == []
+
+
+def _verdict(db: Path, trace: str, to_step: str, body: str, start_ns: int = 0) -> None:
+    _insert(
+        db, trace, "message",
+        {"msg.from": "orchestrator", "msg.to": to_step, "msg.kind": "verdict", "msg.body": body},
+        start_ns=start_ns,
+    )
+
+
+def test_repeated_rejection_across_runs(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    _verdict(db, t1, "implement", "missing tests", start_ns=10)
+    _verdict(db, t1, "implement", "still missing tests", start_ns=20)
+    _verdict(db, t2, "implement", "edge case unhandled", start_ns=30)
+
+    cands = mine(db)
+
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.kind == "repeated_rejection"
+    assert c.subject == "implement"
+    assert set(c.runs) == {"r1", "r2"}
+    assert c.count == 3
+    assert "edge case unhandled" in c.text  # latest feedback surfaced
+
+
+def test_rejections_in_single_run_ignored(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1 = _seed_run(db, "r1")
+    _verdict(db, t1, "implement", "nope", start_ns=10)
+    _verdict(db, t1, "implement", "still nope", start_ns=20)
+
+    assert mine(db) == []
+
+
+def test_non_verdict_messages_ignored(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    for t in (t1, t2):
+        _insert(db, t, "message",
+                {"msg.from": "o", "msg.to": "implement", "msg.kind": "classify", "msg.body": "x"})
+
+    assert mine(db) == []
+
+
+def test_recurring_tool_failure_across_runs(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    for t in (t1, t2):
+        _insert(db, t, "tool_call", {"tool.name": "Bash", "tool.status": "failed"})
+    _insert(db, t1, "tool_call", {"tool.name": "Edit", "tool.status": "completed"})
+
+    cands = mine(db)
+
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.kind == "recurring_tool_failure"
+    assert c.subject == "Bash"
+    assert set(c.runs) == {"r1", "r2"}
+    assert c.count == 2
+
+
+def test_recurring_mcp_failure_across_runs(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    for t in (t1, t2):
+        _insert(db, t, "mcp.call", {"mcp.tool": "write", "mcp.is_error": True, "step.id": "audit"})
+    _insert(db, t1, "mcp.call", {"mcp.tool": "search", "mcp.is_error": False, "step.id": "plan"})
+
+    cands = mine(db)
+
+    assert len(cands) == 1
+    assert cands[0].kind == "recurring_tool_failure"
+    assert cands[0].subject == "mcp:write"
+
+
+def test_single_run_tool_failure_ignored(tmp_path: Path) -> None:
+    db = tmp_path / "spans.sqlite"
+    t1 = _seed_run(db, "r1")
+    _insert(db, t1, "tool_call", {"tool.name": "Bash", "tool.status": "failed"})
+    _insert(db, t1, "tool_call", {"tool.name": "Bash", "tool.status": "failed"})
+
+    assert mine(db) == []
+
+
+def test_write_candidates_renders_markdown(tmp_path: Path) -> None:
+    cands = [
+        Candidate(kind="repeated_rejection", subject="implement", runs=("r1", "r2"),
+                  count=3, text="Review rejected step 'implement' 3 time(s)."),
+        Candidate(kind="recurring_tool_failure", subject="Bash", runs=("r1", "r2"),
+                  count=5, text="Tool 'Bash' failed 5 time(s)."),
+    ]
+    out = tmp_path / "kb" / "candidates.md"
+
+    write_candidates(cands, out)
+
+    body = out.read_text()
+    assert "UNVETTED" in body
+    assert "auditor" in body  # vetting duty stated
+    bullets = [ln for ln in body.splitlines() if ln.startswith("- ")]
+    # sorted by count desc: tool failure (5) before rejection (3)
+    assert "recurring_tool_failure" in bullets[0] and "Bash" in bullets[0]
+    assert "repeated_rejection" in bullets[1]
+    assert "(runs: r1, r2)" in bullets[0]
+
+
+def test_write_candidates_empty_states_none(tmp_path: Path) -> None:
+    out = tmp_path / "candidates.md"
+    write_candidates([], out)
+    assert "No candidates mined." in out.read_text()
+
+
+def test_cli_mine_writes_candidates_file(tmp_path: Path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from orchestrator.cli import app
+
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    _step(db, t1, "implement", is_error=True)
+    _step(db, t2, "implement", is_error=True)
+    monkeypatch.setenv("ORCH_SPAN_DB", str(db))
+
+    result = CliRunner().invoke(app, ["mine", "--repo", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "implement" in result.stdout
+    out = tmp_path / ".orchestrator" / "knowledge" / "candidates.md"
+    assert out.is_file()
+    assert "recurring_step_failure" in out.read_text()
+
+
+def test_cli_mine_no_candidates(tmp_path: Path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from orchestrator.cli import app
+
+    db = tmp_path / "spans.sqlite"
+    _seed_run(db, "r1")
+    monkeypatch.setenv("ORCH_SPAN_DB", str(db))
+
+    result = CliRunner().invoke(app, ["mine", "--repo", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "no candidates mined" in result.stdout.lower()
+    assert (tmp_path / ".orchestrator" / "knowledge" / "candidates.md").is_file()
+
+
+def test_cli_mine_out_and_min_runs(tmp_path: Path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from orchestrator.cli import app
+
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    _step(db, t1, "implement", is_error=True)
+    _step(db, t2, "implement", is_error=True)
+    monkeypatch.setenv("ORCH_SPAN_DB", str(db))
+    out = tmp_path / "elsewhere.md"
+
+    result = CliRunner().invoke(
+        app, ["mine", "--repo", str(tmp_path), "--out", str(out), "--min-runs", "3"]
+    )
+
+    assert result.exit_code == 0
+    assert out.is_file()
+    assert "No candidates mined." in out.read_text()
+
+
+def test_mined_candidates_are_searchable_via_kb(tmp_path: Path) -> None:
+    """Closed loop seam: mine → candidates.md → auditor reads it as a knowledge
+    source through the existing lexical search (then vets via the gated write)."""
+    import json as _json
+
+    from orchestrator.config.loader import Workspace
+    from orchestrator.config.schemas import Config, KnowledgeSource
+    from orchestrator.knowledge.lexical import search
+    from orchestrator.knowledge.provider import build_knowledge_mcp
+    from orchestrator.safety.capabilities import ResolvedCaps
+
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    _step(db, t1, "implement", is_error=True)
+    _step(db, t2, "implement", is_error=True)
+
+    out = tmp_path / ".orchestrator" / "knowledge" / "candidates.md"
+    write_candidates(mine(db), out)
+
+    ws = Workspace(config=Config())
+    ws.knowledge_sources = {
+        "candidates": KnowledgeSource(
+            name="candidates", sources=[".orchestrator/knowledge/candidates.md"]
+        )
+    }
+    caps = ResolvedCaps(knowledge_read=("candidates",))
+    [srv] = build_knowledge_mcp(ws, caps, tmp_path)
+    sources = _json.loads(srv.env["ORCH_KB_SOURCES"])
+    assert sources == [".orchestrator/knowledge/candidates.md"]
+
+    hits = search("implement failed", sources, tmp_path, limit=5)
+    assert hits and any("recurring_step_failure" in h.snippet for h in hits)
