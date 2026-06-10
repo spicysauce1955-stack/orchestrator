@@ -1,0 +1,21 @@
+# Codex-adapter de-risk pipeline: a single codex implement step then merge.
+# Proves the orchestrator drives the REAL codex binary end-to-end (worktree ->
+# codex exec --json -> diff capture -> merge). Mirrors bench-oc.yaml: no review
+# (claude's review loop is validated separately); merge with no review verdict
+# proceeds.
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: implement
+    role: codex_implementer
+    prompt: |
+      Implement the stub module to satisfy README.md (the task: {{task}}). Implement
+      the full contract described there. Run `uv run --with pytest pytest -q` until
+      the smoke tests in tests/ pass.
+    success_criteria: "uv run --with pytest pytest -q tests/"
+    max_retries: 1
+
+  - id: merge
+    type: task
+    needs: [implement]
+    merge_strategy: sequential-rebase
