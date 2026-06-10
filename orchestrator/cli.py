@@ -20,7 +20,7 @@ from orchestrator.observability.query import run_messages, run_metrics, run_stat
 from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tracer
 from orchestrator.observability.store import SqliteSpanExporter, span_db_path
 from orchestrator.runtime.controller import make_controller
-from orchestrator.runtime.executors import run_agent_step
+from orchestrator.runtime.executors import run_agent_step, run_best_of_step
 from orchestrator.runtime.state import RunContext, RunStatus
 from orchestrator.runtime.template import TemplateError
 
@@ -133,6 +133,12 @@ def run(
             with tracer.start_as_current_span(SPAN_RUN) as run_span:
                 run_span.set_attribute("run.id", run_id)
                 run_span.set_attribute("pipeline", pipeline)
+                if step.best_of >= 2:
+                    judge_adapter = registry.adapter_for(workspace.roles[step.judge].harness)
+                    return await run_best_of_step(
+                        workspace, pipe, step, ctx,
+                        repo=repo, adapter=adapter, judge_adapter=judge_adapter,
+                    )
                 return await run_agent_step(workspace, pipe, step, ctx, repo=repo, adapter=adapter)
 
         try:

@@ -26,6 +26,7 @@ from orchestrator.harness.registry import HarnessRegistry
 from orchestrator.observability.spans import SPAN_RUN, get_tracer
 from orchestrator.runtime.executors import (
     run_agent_step,
+    run_best_of_step,
     run_gate_step,
     run_merge_step,
 )
@@ -80,10 +81,20 @@ class DeterministicScheduler:
             elif step.type == StepType.agent:
                 harness = self.workspace.roles[step.role].harness
                 adapter = self.registry.adapter_for(harness)
-                await run_agent_step(
-                    self.workspace, pipeline, step, ctx,
-                    repo=self.repo, adapter=adapter, agent=self.agent,
-                )
+                if step.best_of >= 2:
+                    # The judge may live on a different harness than the candidates.
+                    judge_harness = self.workspace.roles[step.judge].harness
+                    await run_best_of_step(
+                        self.workspace, pipeline, step, ctx,
+                        repo=self.repo, adapter=adapter,
+                        judge_adapter=self.registry.adapter_for(judge_harness),
+                        agent=self.agent,
+                    )
+                else:
+                    await run_agent_step(
+                        self.workspace, pipeline, step, ctx,
+                        repo=self.repo, adapter=adapter, agent=self.agent,
+                    )
             else:  # gate
                 run_gate_step(step, ctx)
             return {"ctx": ctx}

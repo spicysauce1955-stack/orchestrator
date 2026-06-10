@@ -123,3 +123,35 @@ async def test_single_qualifier_wins_without_judge(tmp_path, monkeypatch):
     assert final.output_data["winner"] == "2"
     assert "Candidate two" in final.output
     assert "judge" not in calls.read_text().lower()
+
+
+async def test_scheduler_runs_best_of_pipeline_through_merge(tmp_path, monkeypatch):
+    """E2E: classify-free pipeline implement(best_of)->merge; winner diff lands."""
+    from orchestrator.runtime.scheduler import DeterministicScheduler
+    from orchestrator.runtime.state import RunStatus
+
+    monkeypatch.setenv("ORCH_FAKE_SCRIPT_DIR", str(_scripts_dir(tmp_path)))
+    monkeypatch.setenv("ORCH_FAKE_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("ORCH_FAKE_TOUCH", "feature.py")
+    configure_tracing(exporter=InMemorySpanExporter())
+    repo = make_repo(tmp_path / "repo")
+    ws = load_workspace(EXAMPLE)
+    adapter = ClaudeCodeCLIAdapter(binary=[sys.executable, str(FAKE)])
+    pipeline = Pipeline.model_validate({
+        "name": "bo-e2e",
+        "inputs": {"task": "string"},
+        "steps": [
+            {"id": "implement", "role": "implementer", "prompt": "Implement the feature",
+             "best_of": 2, "judge": "reviewer"},
+            {"id": "merge", "type": "task", "needs": ["implement"],
+             "merge_strategy": "sequential-rebase"},
+        ],
+    })
+    scheduler = DeterministicScheduler(ws, adapter, repo)
+
+    ctx = await scheduler.run(pipeline, {"task": "x"}, run_id="boe2e")
+
+    assert ctx.status == RunStatus.COMPLETED
+    assert ctx.artifacts["implement"].output_data["winner"] == "2"
+    merge_art = ctx.artifacts["merge"]
+    assert merge_art.is_error is False, merge_art.output
