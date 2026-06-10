@@ -1,0 +1,8 @@
+# Single edit-capable role: bugfix-fast trades governance for speed.
+harness: claude-code
+permissions: edit
+access:
+  filesystem: { write: ["src/**", "tests/**"], read_only: [".git", ".claude"] }
+  shell: { deny: ["rm -rf", "git push --force", "DROP TABLE"] }
+  git: { push_to_main: false, open_pr: true }
+knowledge: [repo-conventions]

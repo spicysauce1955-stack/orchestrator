@@ -1,0 +1,7 @@
+# Implementer on the OpenCode harness (harness != model).
+harness: opencode
+model: zhipu/glm-4.6        # provider/model; `glm` alias also accepted
+permissions: edit
+access:
+  filesystem: { write: ["src/**", "tests/**"] }
+  shell: { deny: ["rm -rf", "git push --force"] }

@@ -1,0 +1,5 @@
+defaults:
+  isolation: worktree
+  mode: declarative
+  budget: { max_usd: 3, timeout_s: 900 }
+  observability_sink: sqlite

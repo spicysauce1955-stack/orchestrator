@@ -1,0 +1,12 @@
+harness: claude-code
+model: opus
+permissions: edit
+access:
+  filesystem: { write: ["src/**", "tests/**"], read_only: [".git", ".claude"] }
+  network: { egress: ["pypi.org", "github.com"] }
+  shell: { deny: ["rm -rf", "git push --force", "DROP TABLE"] }
+  git: { push_to_main: false, open_pr: true }
+  knowledge: { read: ["repo-conventions"], write: [] }
+skills: [test-runner]
+knowledge: [repo-conventions]
+budget: { max_usd: 5, timeout_s: 1800 }

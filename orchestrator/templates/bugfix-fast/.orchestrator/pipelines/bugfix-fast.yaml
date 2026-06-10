@@ -1,0 +1,18 @@
+# Minimal loop: implement -> test -> merge (PR). No review cycle, no HITL gate.
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: implement
+    role: implementer
+    prompt: "Fix this bug:\n{{task}}\nWrite a regression test first, then the fix."
+    success_criteria: "true"
+    max_retries: 2
+  - id: test
+    role: implementer
+    needs: [implement]
+    prompt: "Run the test suite and fix any remaining failures for: {{task}}"
+    success_criteria: "true"
+  - id: merge
+    type: task
+    needs: [test]
+    merge_strategy: sequential-rebase
