@@ -59,7 +59,11 @@ def main() -> int:
         script = Path(script_env)
     elif script_dir:
         pl = prompt.lower()
-        if "classify" in pl:
+        if "winner" in pl:
+            # Checked first: a best-of judge prompt asks for {"winner": ...} but
+            # may also mention "implement"/"candidate" etc.
+            keyword = "winner"
+        elif "classify" in pl:
             keyword = "classify"
         elif "review" in pl:
             keyword = "review"
@@ -67,6 +71,11 @@ def main() -> int:
             # Routes on the WORKER's prompt. The orchestrator's answer prompt is
             # worded to avoid this keyword so it falls through to `default`.
             keyword = "question"
+        elif "implement" in pl:
+            # Best-of candidates: numbered variants (implement.<n>.ndjson) let a
+            # test give each candidate distinct output. The shared scripts dir has
+            # no implement.ndjson, so existing tests still fall through to default.
+            keyword = "implement"
         else:
             keyword = "default"
         script = Path(script_dir) / f"{keyword}.ndjson"

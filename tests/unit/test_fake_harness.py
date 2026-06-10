@@ -103,3 +103,52 @@ def test_calls_log_appends_per_invocation(tmp_path):
             env=env, capture_output=True, text=True,
         )
     assert len(calls.read_text().splitlines()) == 2
+
+
+def test_winner_keyword_routes_to_judge_script(tmp_path):
+    env = {**os.environ, "ORCH_FAKE_SCRIPT_DIR": str(SCRIPTS_DIR)}
+    proc = subprocess.run(
+        [sys.executable, str(FAKE), "-p",
+         'Pick the best candidate. Reply with JSON {"winner": "<k>"}.',
+         "--output-format", "stream-json"],
+        env=env, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0
+    assert '\\"winner\\": \\"2\\"' in proc.stdout
+
+
+def test_implement_keyword_supports_numbered_state_variants(tmp_path):
+    """Candidates of a best-of step are distinguished via $ORCH_FAKE_STATE numbering."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for src in ("default.ndjson", "winner.ndjson"):
+        (scripts / src).write_text((SCRIPTS_DIR / src).read_text())
+    one = (SCRIPTS_DIR / "plan.ndjson").read_text().replace("plan", "cand-one")
+    (scripts / "implement.1.ndjson").write_text(one.replace("Here is the", "Candidate one"))
+    (scripts / "implement.2.ndjson").write_text(one.replace("Here is the", "Candidate two"))
+    state = tmp_path / "state.json"
+    env = {**os.environ, "ORCH_FAKE_SCRIPT_DIR": str(scripts), "ORCH_FAKE_STATE": str(state)}
+
+    outs = []
+    for _ in range(2):
+        proc = subprocess.run(
+            [sys.executable, str(FAKE), "-p", "Implement the feature",
+             "--output-format", "stream-json"],
+            env=env, capture_output=True, text=True,
+        )
+        assert proc.returncode == 0
+        outs.append(proc.stdout)
+    assert "Candidate one" in outs[0]
+    assert "Candidate two" in outs[1]
+
+
+def test_implement_keyword_without_scripts_falls_back_to_default(tmp_path):
+    env = {**os.environ, "ORCH_FAKE_SCRIPT_DIR": str(SCRIPTS_DIR)}
+    proc = subprocess.run(
+        [sys.executable, str(FAKE), "-p", "Implement this plan",
+         "--output-format", "stream-json"],
+        env=env, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0
+    default = (SCRIPTS_DIR / "default.ndjson").read_text().splitlines()[-1]
+    assert default.strip() in proc.stdout

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from langgraph.types import interrupt
@@ -282,6 +283,136 @@ async def run_agent_step(
         return artifact
     finally:
         remove_worktree(Path(repo), worktree)
+
+
+async def run_best_of_step(
+    workspace: Workspace,
+    pipeline: Pipeline,
+    step: Step,
+    ctx: RunContext,
+    *,
+    repo: Path,
+    adapter: HarnessAdapter,
+    judge_adapter: HarnessAdapter,
+    agent=None,
+) -> Artifact:
+    """best-of-n (spec §4): run N candidates, a read-only judge selects the winner.
+
+    Executor-level fan-out: the graph stays linear (one node), each candidate is
+    a full `run_agent_step` under a cloned id `<id>.cand<k>` (own worktree/branch,
+    own success_criteria/retry), then the judge runs as one more read-only agent
+    step whose verdict artifact (`<id>.judge`) is the accountable selection. A
+    failed/unparseable judge is a step ERROR, never a silent fallback. Candidates
+    run sequentially in MVP (concurrent `git worktree add` lock-safety unproven).
+    """
+    if step.best_of < 2 or step.judge is None:
+        raise ValueError(f"step '{step.id}' is not a best-of step")
+    tracer = get_tracer()
+    with tracer.start_as_current_span(SPAN_STEP) as span:
+        span.set_attribute("step.id", step.id)
+        span.set_attribute("step.role", step.role or "")
+        span.set_attribute("step.type", "agent")
+        span.set_attribute("bestof.n", step.best_of)
+
+        # Attempt accounting + relayed feedback live on the best-of id (an
+        # on_reject loop-back targets `step.id`, not the candidate clones).
+        ctx.attempts[step.id] = ctx.attempts.get(step.id, 0) + 1
+        relayed = ctx.relayed_feedback.pop(step.id, None)
+
+        candidates: list[Artifact] = []
+        for k in range(1, step.best_of + 1):
+            cand = step.model_copy(
+                update={"id": f"{step.id}.cand{k}", "best_of": 1, "judge": None}
+            )
+            if relayed:
+                ctx.relayed_feedback[cand.id] = relayed  # popped by run_agent_step
+            art = await run_agent_step(
+                workspace, pipeline, cand, ctx, repo=repo, adapter=adapter, agent=agent
+            )
+            candidates.append(art)
+
+        qualifying = [(k, a) for k, a in enumerate(candidates, 1) if not a.is_error]
+        spent_usd = sum(a.cost_usd for a in candidates)
+        spent_tokens = sum(a.tokens for a in candidates)
+
+        def _finish(art: Artifact, *, winner: int | None) -> Artifact:
+            if winner is not None:
+                span.set_attribute("bestof.winner", str(winner))
+            span.set_attribute("step.is_error", art.is_error)
+            # Direct write, NOT ctx.record: candidate/judge costs were already
+            # recorded into the run total; the final carries the sum for display.
+            ctx.artifacts[step.id] = art
+            return art
+
+        if not qualifying:
+            failures = "; ".join(f"cand{k}: {a.output[:120]}" for k, a in enumerate(candidates, 1))
+            return _finish(
+                Artifact(
+                    step_id=step.id,
+                    output=f"best-of: all {step.best_of} candidates failed ({failures})",
+                    diff="", branch="", cost_usd=spent_usd, tokens=spent_tokens,
+                    is_error=True,
+                ),
+                winner=None,
+            )
+
+        if len(qualifying) == 1:
+            # One survivor: it wins by default — no judge cost to spend.
+            k, art = qualifying[0]
+            final = replace(
+                art, step_id=step.id, cost_usd=spent_usd, tokens=spent_tokens,
+                output_data={**(art.output_data or {}), "winner": str(k)},
+            )
+            return _finish(final, winner=k)
+
+        base_prompt = _render_prompt(step, step.role, ctx)
+        parts = [
+            f"You are the accountable judge for step '{step.id}'.",
+            f"{len(qualifying)} candidates attempted the same task in isolation.",
+            "Task prompt was:",
+            base_prompt,
+            "",
+        ]
+        for k, art in qualifying:
+            parts += [f"--- Candidate {k} diff ---", art.diff[:4000] or "(no diff)", ""]
+        parts.append(
+            "Score the candidates on correctness and robustness and select exactly "
+            'one. Reply with JSON {"winner": "<candidate number>"}.'
+        )
+        enum = ",".join(str(k) for k, _ in qualifying)
+        judge_step = Step(
+            id=f"{step.id}.judge",
+            type=StepType.agent,
+            role=step.judge,
+            prompt="\n".join(parts),
+            output_schema={"winner": f"enum[{enum}]"},
+        )
+        judge_art = await run_agent_step(
+            workspace, pipeline, judge_step, ctx, repo=repo, adapter=judge_adapter
+        )
+        spent_usd += judge_art.cost_usd
+        spent_tokens += judge_art.tokens
+        winner_raw = (judge_art.output_data or {}).get("winner")
+        if judge_art.is_error or winner_raw is None:
+            return _finish(
+                Artifact(
+                    step_id=step.id,
+                    output=(
+                        f"best-of: judge '{step.judge}' failed to select a winner: "
+                        f"{judge_art.output[:300]}"
+                    ),
+                    diff="", branch="", cost_usd=spent_usd, tokens=spent_tokens,
+                    is_error=True,
+                ),
+                winner=None,
+            )
+        winner_k = int(str(winner_raw))
+        winner_art = dict(qualifying)[winner_k]
+        final = replace(
+            winner_art, step_id=step.id, cost_usd=spent_usd, tokens=spent_tokens,
+            output_data={**(winner_art.output_data or {}), "winner": str(winner_k)},
+        )
+        return _finish(final, winner=winner_k)
 
 
 async def run_task_step(

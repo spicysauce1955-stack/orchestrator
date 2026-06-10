@@ -8,6 +8,7 @@ from orchestrator.config.schemas import (
     Harness,
     Isolation,
     PermissionProfile,
+    Step,
     StepType,
 )
 
@@ -183,3 +184,34 @@ def test_pipeline_mode_rejects_typo():
         Pipeline.model_validate(
             {"mode": "declaritive", "steps": [{"id": "a", "type": "task", "prompt": "x"}]}
         )
+
+
+# --- best-of-n (spec §4, M9) ---
+
+
+def test_best_of_with_judge_validates():
+    step = Step(id="implement", role="implementer", best_of=3, judge="reviewer")
+    assert step.best_of == 3
+    assert step.judge == "reviewer"
+
+
+def test_best_of_requires_judge():
+    with pytest.raises(ValidationError, match="judge"):
+        Step(id="implement", role="implementer", best_of=2)
+
+
+def test_judge_requires_best_of():
+    with pytest.raises(ValidationError, match="best_of"):
+        Step(id="implement", role="implementer", judge="reviewer")
+
+
+def test_best_of_only_on_agent_steps():
+    with pytest.raises(ValidationError, match="agent"):
+        Step(id="t", type="task", prompt="x", best_of=2, judge="reviewer")
+
+
+def test_best_of_bounds():
+    with pytest.raises(ValidationError):
+        Step(id="implement", role="implementer", best_of=0, judge="reviewer")
+    with pytest.raises(ValidationError):
+        Step(id="implement", role="implementer", best_of=9, judge="reviewer")

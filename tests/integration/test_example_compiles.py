@@ -55,3 +55,13 @@ def test_qa_demo_pipeline_compiles():
     assert set(result.ir.nodes) == {"classify", "implement"}
     edges = {(e.source, e.target) for e in result.ir.edges}
     assert ("classify", "implement") in edges
+
+
+def test_example_best_of_pipeline_compiles():
+    ws = load_workspace(EXAMPLE)
+    result = compile_pipeline(ws, "best-of")
+    assert result.ok, result.errors
+    assert set(result.ir.nodes) == {"classify", "implement", "merge"}
+    step = next(s for s in ws.pipelines["best-of"].steps if s.id == "implement")
+    assert step.best_of == 2
+    assert step.judge == "reviewer"

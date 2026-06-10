@@ -127,6 +127,10 @@ class Step(_Strict):
     on_reject: str | None = None
     require_approval: bool = False
     merge_strategy: str | None = None
+    # best-of-n (spec §4): N candidates fan out; a read-only agent-as-judge role
+    # selects the winner. Cap 5 = budget sanity (each candidate is a full harness run).
+    best_of: int = Field(default=1, ge=1, le=5)
+    judge: str | None = None
 
     @model_validator(mode="after")
     def _infer_and_check_type(self) -> Step:
@@ -143,6 +147,15 @@ class Step(_Strict):
             raise ValueError(
                 f"step '{self.id}': {self.type.value} step must not set `role`"
             )
+        if self.best_of >= 2:
+            if self.type is not StepType.agent:
+                raise ValueError(f"step '{self.id}': best_of requires an agent step")
+            if self.judge is None:
+                raise ValueError(
+                    f"step '{self.id}': best_of requires a `judge` role (accountable selection)"
+                )
+        elif self.judge is not None:
+            raise ValueError(f"step '{self.id}': `judge` requires best_of >= 2")
         return self
 
 

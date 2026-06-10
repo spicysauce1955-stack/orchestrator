@@ -1,0 +1,19 @@
+# M9 demo: best-of-n — two isolated implement candidates, the read-only
+# reviewer judges and selects the winner (accountable selection, spec §4).
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: classify
+    type: task
+    prompt: 'Classify {{task}} as one of: bugfix | feature | refactor. Reply JSON {"kind":"<one>"}.'
+    output_schema: { kind: "enum[bugfix,feature,refactor]" }
+  - id: implement
+    role: implementer
+    needs: [classify]
+    prompt: "Kind: {{classify.output.kind}}\nImplement: {{task}}"
+    best_of: 2
+    judge: reviewer
+  - id: merge
+    type: task
+    needs: [implement]
+    merge_strategy: sequential-rebase
