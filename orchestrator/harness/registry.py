@@ -33,11 +33,13 @@ class HarnessRegistry:
     def from_env(cls) -> HarnessRegistry:
         """Default production registry: real adapters honoring $ORCH_*_BIN."""
         from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
+        from orchestrator.harness.codex import CodexCLIAdapter
         from orchestrator.harness.opencode import OpenCodeCLIAdapter
 
         return cls(
             {
                 Harness.claude_code: ClaudeCodeCLIAdapter(),
+                Harness.codex: CodexCLIAdapter(),
                 Harness.opencode: OpenCodeCLIAdapter(),
             }
         )

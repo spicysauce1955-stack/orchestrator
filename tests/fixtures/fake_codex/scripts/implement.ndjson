@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"codex-impl-1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Implementing. "}}
+{"type":"item.started","item":{"id":"item_2","type":"file_change","changes":[{"path":"feature.py","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"feature.py","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Implemented the feature."}}
+{"type":"turn.completed","usage":{"input_tokens":900,"cached_input_tokens":100,"output_tokens":100}}

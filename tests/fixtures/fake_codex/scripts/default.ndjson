@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"codex-default-1"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"`[features].codex_hooks` is deprecated."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Looking around. "}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/bash -lc ls","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/bash -lc ls","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Done."}}
+{"type":"turn.completed","usage":{"input_tokens":50,"cached_input_tokens":0,"output_tokens":30}}
