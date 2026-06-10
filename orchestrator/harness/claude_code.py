@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from orchestrator.harness._proc import reap
 from orchestrator.harness.adapter import McpServer, SessionId
 from orchestrator.harness.events import (
     Cost,
@@ -99,6 +100,7 @@ class _Session:
     model: str | None = None
     harness_session_id: str | None = None
     mcp_config_path: str | None = None
+    proc: asyncio.subprocess.Process | None = None
 
 
 def _write_mcp_config(servers: list[McpServer]) -> str:
@@ -185,35 +187,42 @@ class ClaudeCodeCLIAdapter:
                 stderr_chunks.append(data)
 
         stderr_task = asyncio.ensure_future(_drain_stderr())
+        sess.proc = proc
         tool_names: dict[str, str] = {}
         saw_done = False
         assert proc.stdout is not None
-        async for raw in proc.stdout:
-            line = raw.decode().strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            for ev in parse_line(obj, tool_names):
-                if isinstance(ev, SessionStarted):
-                    sess.harness_session_id = ev.session_id
-                if isinstance(ev, Done):
-                    saw_done = True
-                yield ev
-        returncode = await proc.wait()
-        await stderr_task
-        if returncode != 0:
-            # A non-zero harness exit is a failure regardless of streamed result.
-            # Surface the stderr tail so the cause is diagnosable.
-            tail = b"".join(stderr_chunks).decode(errors="replace").strip()
-            msg = f"harness exited {returncode}"
-            if tail:
-                msg += f": {tail[-500:]}"
-            yield Done(result=msg, is_error=True)
-        elif not saw_done:
-            yield Done(result="", is_error=True)
+        try:
+            async for raw in proc.stdout:
+                line = raw.decode().strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                for ev in parse_line(obj, tool_names):
+                    if isinstance(ev, SessionStarted):
+                        sess.harness_session_id = ev.session_id
+                    if isinstance(ev, Done):
+                        saw_done = True
+                    yield ev
+            returncode = await proc.wait()
+            await stderr_task
+            if returncode != 0:
+                # A non-zero harness exit is a failure regardless of streamed result.
+                # Surface the stderr tail so the cause is diagnosable.
+                tail = b"".join(stderr_chunks).decode(errors="replace").strip()
+                msg = f"harness exited {returncode}"
+                if tail:
+                    msg += f": {tail[-500:]}"
+                yield Done(result=msg, is_error=True)
+            elif not saw_done:
+                yield Done(result="", is_error=True)
+        finally:
+            # Abandonment (GeneratorExit at a yield / consumer cancellation):
+            # without this the child outlives the generator and the drain task
+            # is never awaited. Kill + reap; no-op on the normal exit path.
+            await reap(proc, stderr_task)
 
     async def resume(self, session: SessionId) -> SessionId:
         # Re-prompting a resumed session would pass `--resume <harness_session_id>`;
@@ -223,7 +232,13 @@ class ClaudeCodeCLIAdapter:
 
     async def cancel(self, session: SessionId) -> None:
         sess = self._sessions.pop(session, None)
-        if sess and sess.mcp_config_path:
+        if sess is None:
+            return
+        if sess.proc is not None:
+            # A timeout/budget kill path may cancel mid-prompt: take the child
+            # down with the session instead of leaving it running detached.
+            await reap(sess.proc)
+        if sess.mcp_config_path:
             try:
                 os.unlink(sess.mcp_config_path)
             except OSError:

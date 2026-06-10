@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from orchestrator.harness._proc import reap
 from orchestrator.harness.adapter import McpServer, SessionId
 from orchestrator.harness.events import (
     Cost,
@@ -133,6 +134,7 @@ class _OCSession:
     model: str | None = None
     config_path: str | None = None
     harness_session_id: str | None = None
+    proc: asyncio.subprocess.Process | None = None
 
 
 class OpenCodeCLIAdapter:
@@ -226,41 +228,53 @@ class OpenCodeCLIAdapter:
                 stderr_chunks.append(data)
 
         stderr_task = asyncio.ensure_future(_drain_stderr())
+        sess.proc = proc
         tool_names: dict[str, str] = {}
         text_parts: list[str] = []
         assert proc.stdout is not None
-        async for raw in proc.stdout:
-            line = raw.decode().strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            for ev in parse_opencode_line(obj, tool_names):
-                if isinstance(ev, SessionStarted):
-                    sess.harness_session_id = ev.session_id
-                if isinstance(ev, MessageChunk):
-                    text_parts.append(ev.text)
-                yield ev
-        returncode = await proc.wait()
-        await stderr_task
-        # OpenCode has no single "result" event; synthesize Done at stream end.
-        if returncode != 0:
-            tail = b"".join(stderr_chunks).decode(errors="replace").strip()
-            result = "".join(text_parts)
-            if tail:
-                result = f"{result}\n[opencode exited {returncode}: {tail[-500:]}]".strip()
-            yield Done(result=result, is_error=True)
-        else:
-            yield Done(result="".join(text_parts), is_error=False)
+        try:
+            async for raw in proc.stdout:
+                line = raw.decode().strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                for ev in parse_opencode_line(obj, tool_names):
+                    if isinstance(ev, SessionStarted):
+                        sess.harness_session_id = ev.session_id
+                    if isinstance(ev, MessageChunk):
+                        text_parts.append(ev.text)
+                    yield ev
+            returncode = await proc.wait()
+            await stderr_task
+            # OpenCode has no single "result" event; synthesize Done at stream end.
+            if returncode != 0:
+                tail = b"".join(stderr_chunks).decode(errors="replace").strip()
+                result = "".join(text_parts)
+                if tail:
+                    result = f"{result}\n[opencode exited {returncode}: {tail[-500:]}]".strip()
+                yield Done(result=result, is_error=True)
+            else:
+                yield Done(result="".join(text_parts), is_error=False)
+        finally:
+            # Abandonment (GeneratorExit at a yield / consumer cancellation):
+            # kill + reap so the child and drain task never outlive the stream.
+            await reap(proc, stderr_task)
 
     async def resume(self, session: SessionId) -> SessionId:
         return session
 
     async def cancel(self, session: SessionId) -> None:
         sess = self._sessions.pop(session, None)
-        if sess and sess.config_path:
+        if sess is None:
+            return
+        if sess.proc is not None:
+            # A timeout/budget kill path may cancel mid-prompt: take the child
+            # down with the session instead of leaving it running detached.
+            await reap(sess.proc)
+        if sess.config_path:
             try:
                 os.unlink(sess.config_path)
             except OSError:
