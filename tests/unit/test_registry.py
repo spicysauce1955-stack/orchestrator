@@ -2,6 +2,7 @@ import pytest
 
 from orchestrator.config.schemas import Harness
 from orchestrator.harness.claude_code import ClaudeCodeCLIAdapter
+from orchestrator.harness.codex import CodexCLIAdapter
 from orchestrator.harness.opencode import OpenCodeCLIAdapter
 from orchestrator.harness.registry import HarnessRegistry
 
@@ -25,12 +26,18 @@ def test_explicit_mapping_routes_by_harness():
 def test_unregistered_harness_raises():
     reg = HarnessRegistry({Harness.claude_code: ClaudeCodeCLIAdapter(binary=["c"])})
     with pytest.raises(KeyError):
-        reg.adapter_for(Harness.codex)
+        reg.adapter_for(Harness.opencode)
+    with pytest.raises(KeyError):
+        HarnessRegistry({}).adapter_for(Harness.codex)
 
 
-def test_from_env_builds_claude_and_opencode(monkeypatch):
+def test_from_env_builds_all_adapters(monkeypatch):
     monkeypatch.setenv("ORCH_CLAUDE_BIN", "fakeclaude")
     monkeypatch.setenv("ORCH_OPENCODE_BIN", "fakeoc")
+    monkeypatch.setenv("ORCH_CODEX_BIN", "fakecodex")
     reg = HarnessRegistry.from_env()
     assert isinstance(reg.adapter_for(Harness.claude_code), ClaudeCodeCLIAdapter)
     assert isinstance(reg.adapter_for(Harness.opencode), OpenCodeCLIAdapter)
+    codex = reg.adapter_for(Harness.codex)
+    assert isinstance(codex, CodexCLIAdapter)
+    assert codex._binary == ["fakecodex"]
