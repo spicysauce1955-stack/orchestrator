@@ -245,3 +245,37 @@ def test_cli_mine_out_and_min_runs(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert out.is_file()
     assert "No candidates mined." in out.read_text()
+
+
+def test_mined_candidates_are_searchable_via_kb(tmp_path: Path) -> None:
+    """Closed loop seam: mine → candidates.md → auditor reads it as a knowledge
+    source through the existing lexical search (then vets via the gated write)."""
+    import json as _json
+
+    from orchestrator.config.loader import Workspace
+    from orchestrator.config.schemas import Config, KnowledgeSource
+    from orchestrator.knowledge.lexical import search
+    from orchestrator.knowledge.provider import build_knowledge_mcp
+    from orchestrator.safety.capabilities import ResolvedCaps
+
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    _step(db, t1, "implement", is_error=True)
+    _step(db, t2, "implement", is_error=True)
+
+    out = tmp_path / ".orchestrator" / "knowledge" / "candidates.md"
+    write_candidates(mine(db), out)
+
+    ws = Workspace(config=Config())
+    ws.knowledge_sources = {
+        "candidates": KnowledgeSource(
+            name="candidates", sources=[".orchestrator/knowledge/candidates.md"]
+        )
+    }
+    caps = ResolvedCaps(knowledge_read=("candidates",))
+    [srv] = build_knowledge_mcp(ws, caps, tmp_path)
+    sources = _json.loads(srv.env["ORCH_KB_SOURCES"])
+    assert sources == [".orchestrator/knowledge/candidates.md"]
+
+    hits = search("implement failed", sources, tmp_path, limit=5)
+    assert hits and any("recurring_step_failure" in h.snippet for h in hits)
