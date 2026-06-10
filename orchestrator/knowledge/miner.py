@@ -169,11 +169,11 @@ derived data and is regenerated on every mine.
 
 
 def write_candidates(cands: list[Candidate], path: Path) -> None:
-    """Render candidates (already sorted by `mine`) to a regenerated markdown file."""
+    """Render candidates to a regenerated markdown file, most-evidenced first."""
     lines = [_HEADER]
     if not cands:
         lines.append("No candidates mined.")
-    for c in cands:
+    for c in sorted(cands, key=lambda c: (-c.count, c.kind, c.subject)):
         lines.append(f"- [{c.kind}] {c.text} (runs: {', '.join(c.runs)})")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n")
