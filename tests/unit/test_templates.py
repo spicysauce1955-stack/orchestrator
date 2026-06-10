@@ -60,3 +60,48 @@ def test_every_template_scaffolds_and_compiles(name: str, tmp_path: Path) -> Non
     for pipeline in ws.pipelines:
         result = compile_pipeline(ws, pipeline)
         assert result.ok, f"{name}/{pipeline}: {result.errors}"
+
+
+# --- CLI ---
+
+
+def _invoke(args):
+    from typer.testing import CliRunner
+
+    from orchestrator.cli import app
+
+    return CliRunner().invoke(app, args)
+
+
+def test_cli_init_scaffolds_default_template(tmp_path: Path) -> None:
+    result = _invoke(["init", "--dest", str(tmp_path)])
+    assert result.exit_code == 0
+    assert (tmp_path / ".orchestrator" / "pipelines" / "review-heavy.yaml").is_file()
+    assert "review-heavy" in result.stdout
+
+
+def test_cli_init_list_prints_templates_and_creates_nothing(tmp_path: Path) -> None:
+    result = _invoke(["init", "--list", "--dest", str(tmp_path)])
+    assert result.exit_code == 0
+    for name in EXPECTED:
+        assert name in result.stdout
+    assert not (tmp_path / ".orchestrator").exists()
+
+
+def test_cli_init_unknown_template_fails_with_valid_names(tmp_path: Path) -> None:
+    result = _invoke(["init", "--template", "nope", "--dest", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "bugfix-fast" in result.stdout
+
+
+def test_cli_init_existing_workspace_advises_force(tmp_path: Path) -> None:
+    (tmp_path / ".orchestrator").mkdir()
+    result = _invoke(["init", "--dest", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "--force" in result.stdout
+
+
+def test_cli_new_requires_and_uses_template(tmp_path: Path) -> None:
+    result = _invoke(["new", "--template", "bugfix-fast", "--dest", str(tmp_path)])
+    assert result.exit_code == 0
+    assert (tmp_path / ".orchestrator" / "pipelines" / "bugfix-fast.yaml").is_file()
