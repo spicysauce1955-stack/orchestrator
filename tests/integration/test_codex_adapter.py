@@ -94,6 +94,8 @@ async def test_nonfatal_error_item_does_not_fail_step(monkeypatch, tmp_path):
     assert isinstance(done, Done) and done.is_error is False
     assert any(isinstance(e, MessageChunk) for e in events)
     assert any(isinstance(e, ToolCall) and e.status == "completed" for e in events)
+    # MCP calls surface as named ToolCalls (real codex emits mcp_tool_call items)
+    assert ToolCall("mcp__knowledge__search", "completed") in events
 
 
 async def test_honors_orch_codex_bin(monkeypatch):
