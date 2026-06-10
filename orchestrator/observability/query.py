@@ -12,7 +12,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestrator.observability.spans import SPAN_SESSION
+from orchestrator.observability.spans import SPAN_KNOWLEDGE_WRITE, SPAN_SESSION
 from orchestrator.observability.store import connect
 
 
@@ -160,24 +160,39 @@ class MessageView:
 
 
 def run_messages(db: Path, run_id: str) -> list[MessageView]:
-    """The coordination board for a run: `message` spans in time order.
-
-    Forward-compatible: when `knowledge.write` span emission lands (deferred,
-    cross-process), add its name here — no caller change needed.
-    """
+    """The coordination board for a run: `message` + `knowledge.write` spans
+    interleaved in time order (the latter are row-written by the knowledge MCP
+    server subprocess under the run's trace)."""
     with contextlib.closing(_open(db)) as conn:
         traces = _traces_for_run(conn, run_id)
         if not traces:
             return []
-        out: list[MessageView] = []
+        timed: list[tuple[int, MessageView]] = []
         for row in _spans(conn, traces, "message"):
             attrs = json.loads(row["attrs"])
-            out.append(
-                MessageView(
-                    frm=str(attrs.get("msg.from", "")),
-                    to=str(attrs.get("msg.to", "")),
-                    kind=str(attrs.get("msg.kind", "")),
-                    body=str(attrs.get("msg.body", "")),
+            timed.append(
+                (
+                    int(row["start_ns"]),
+                    MessageView(
+                        frm=str(attrs.get("msg.from", "")),
+                        to=str(attrs.get("msg.to", "")),
+                        kind=str(attrs.get("msg.kind", "")),
+                        body=str(attrs.get("msg.body", "")),
+                    ),
                 )
             )
-    return out
+        for row in _spans(conn, traces, SPAN_KNOWLEDGE_WRITE):
+            attrs = json.loads(row["attrs"])
+            timed.append(
+                (
+                    int(row["start_ns"]),
+                    MessageView(
+                        frm=str(attrs.get("step.id", "")),
+                        to=str(attrs.get("kb.target", "")),
+                        kind=SPAN_KNOWLEDGE_WRITE,
+                        body=str(attrs.get("kb.lesson", "")),
+                    ),
+                )
+            )
+    timed.sort(key=lambda t: t[0])
+    return [view for _, view in timed]

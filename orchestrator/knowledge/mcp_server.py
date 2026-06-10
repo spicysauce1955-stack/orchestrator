@@ -8,16 +8,50 @@ harnesses define the contract, real-harness reconciliation is a follow-up.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from orchestrator.knowledge.lexical import search
+from orchestrator.observability.store import connect
 
 PROTOCOL_VERSION = "2024-11-05"
+
+
+@dataclass(frozen=True)
+class SpanSink:
+    """Row-writes spans into the run's span store (we run in a harness-spawned
+    subprocess, so we can't share the orchestrator's OTel provider). The trace
+    context arrives via env from the provider that configured this server."""
+
+    db: Path
+    trace_id: str
+    parent_id: str | None
+    step: str
+
+    def emit(self, name: str, attrs: dict, start_ns: int, end_ns: int) -> None:
+        row = (
+            self.trace_id,
+            os.urandom(8).hex(),
+            self.parent_id,
+            name,
+            start_ns,
+            end_ns,
+            json.dumps({"step.id": self.step, **attrs}),
+        )
+        with contextlib.closing(connect(self.db)) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO spans "
+                "(trace_id, span_id, parent_id, name, start_ns, end_ns, attrs) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                row,
+            )
+            conn.commit()
 
 
 @dataclass(frozen=True)
@@ -25,6 +59,7 @@ class ServerState:
     sources: list[str]
     root: Path
     write_target: Path | None = None  # None -> write tool not offered
+    sink: SpanSink | None = None  # None -> span emission off (no span env)
 
 
 def _tools(state: ServerState) -> list[dict]:
@@ -108,11 +143,33 @@ def handle_request(req: dict, state: ServerState) -> dict | None:
         params = req.get("params") or {}
         name = params.get("name")
         args = params.get("arguments") or {}
+        start_ns = time.time_ns()
         if name == "search":
-            return _ok(req_id, _do_search(state, args))
-        if name == "write":
-            return _ok(req_id, _do_write(state, args))
-        return _ok(req_id, _text(f"unknown tool '{name}'", is_error=True))
+            result = _do_search(state, args)
+        elif name == "write":
+            result = _do_write(state, args)
+        else:
+            result = _text(f"unknown tool '{name}'", is_error=True)
+        if state.sink is not None:
+            end_ns = time.time_ns()
+            is_error = bool(result.get("isError", False))
+            state.sink.emit(
+                "mcp.call",
+                {"mcp.tool": str(name), "mcp.is_error": is_error},
+                start_ns,
+                end_ns,
+            )
+            if name == "write" and not is_error:
+                state.sink.emit(
+                    "knowledge.write",
+                    {
+                        "kb.target": str(state.write_target),
+                        "kb.lesson": str(args.get("lesson", "")).strip(),
+                    },
+                    start_ns,
+                    end_ns,
+                )
+        return _ok(req_id, result)
     return _err(req_id, -32601, f"method not found: {method}")
 
 
@@ -124,7 +181,19 @@ def state_from_env() -> ServerState:
         raise ValueError(f"ORCH_KB_SOURCES is not valid JSON: {e}") from e
     root = Path(os.environ.get("ORCH_KB_ROOT", "."))
     wt = os.environ.get("ORCH_KB_WRITE_TARGET")
-    return ServerState(sources=sources, root=root, write_target=Path(wt) if wt else None)
+    sink: SpanSink | None = None
+    span_db = os.environ.get("ORCH_SPAN_DB")
+    trace_id = os.environ.get("ORCH_SPAN_TRACE")
+    if span_db and trace_id:
+        sink = SpanSink(
+            db=Path(span_db),
+            trace_id=trace_id,
+            parent_id=os.environ.get("ORCH_SPAN_PARENT"),
+            step=os.environ.get("ORCH_KB_STEP", ""),
+        )
+    return ServerState(
+        sources=sources, root=root, write_target=Path(wt) if wt else None, sink=sink
+    )
 
 
 def main() -> int:

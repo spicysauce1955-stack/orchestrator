@@ -197,7 +197,6 @@ async def run_agent_step(
     # Write target (if any) is rooted at the REAL repo, not the discarded worktree,
     # so durable lessons persist past the run (see build_knowledge_mcp).
     injected = tuple(inject_core(workspace.core_knowledge, Path(repo), worktree.path))
-    mcp_servers = build_knowledge_mcp(workspace, caps, Path(repo))
     baseline_tests = count_tests(worktree.path)
     try:
         with tracer.start_as_current_span(SPAN_STEP) as step_span:
@@ -205,6 +204,10 @@ async def run_agent_step(
             step_span.set_attribute("step.role", step.role)
             step_span.set_attribute("step.harness", role.harness.value)
             step_span.set_attribute("step.type", "agent")
+
+            # Built inside the step span so the server subprocess inherits this
+            # step's trace context (its mcp.call/knowledge.write spans join the run).
+            mcp_servers = build_knowledge_mcp(workspace, caps, Path(repo), step_id=step.id)
 
             base_prompt = _render_prompt(step, step.role, ctx)
             # One-shot: consumed regardless of outcome. The on_reject loop-back

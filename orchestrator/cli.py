@@ -15,7 +15,7 @@ from orchestrator.config.schemas import Mode, StepType
 from orchestrator.harness.registry import HarnessRegistry
 from orchestrator.observability.query import run_messages, run_metrics, run_status
 from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tracer
-from orchestrator.observability.store import SqliteSpanExporter
+from orchestrator.observability.store import SqliteSpanExporter, span_db_path
 from orchestrator.runtime.controller import make_controller
 from orchestrator.runtime.executors import run_agent_step
 from orchestrator.runtime.state import RunContext, RunStatus
@@ -30,8 +30,7 @@ def _checkpoint_db(repo: Path) -> Path:
 
 
 def _span_db(repo: Path) -> Path:
-    env = os.environ.get("ORCH_SPAN_DB")
-    return Path(env) if env else Path(repo) / ".orch" / "spans.sqlite"
+    return span_db_path(repo)
 
 
 def _print_artifact(artifact, run_id, *, brief: bool = False) -> None:

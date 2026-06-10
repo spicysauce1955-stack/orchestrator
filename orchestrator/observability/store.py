@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 from collections.abc import Sequence
@@ -32,6 +33,16 @@ CREATE TABLE IF NOT EXISTS spans (
 );
 CREATE INDEX IF NOT EXISTS idx_spans_trace ON spans(trace_id);
 """
+
+
+def span_db_path(repo: Path) -> Path:
+    """The span store for a repo: $ORCH_SPAN_DB override, else <repo>/.orch/spans.sqlite.
+
+    Shared by the CLI (exporter side) and the knowledge provider (which hands
+    the same path to the MCP server subprocess so its spans land in one store).
+    """
+    env = os.environ.get("ORCH_SPAN_DB")
+    return Path(env) if env else Path(repo) / ".orch" / "spans.sqlite"
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
