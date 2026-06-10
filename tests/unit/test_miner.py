@@ -188,3 +188,60 @@ def test_write_candidates_empty_states_none(tmp_path: Path) -> None:
     out = tmp_path / "candidates.md"
     write_candidates([], out)
     assert "No candidates mined." in out.read_text()
+
+
+def test_cli_mine_writes_candidates_file(tmp_path: Path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from orchestrator.cli import app
+
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    _step(db, t1, "implement", is_error=True)
+    _step(db, t2, "implement", is_error=True)
+    monkeypatch.setenv("ORCH_SPAN_DB", str(db))
+
+    result = CliRunner().invoke(app, ["mine", "--repo", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "implement" in result.stdout
+    out = tmp_path / ".orchestrator" / "knowledge" / "candidates.md"
+    assert out.is_file()
+    assert "recurring_step_failure" in out.read_text()
+
+
+def test_cli_mine_no_candidates(tmp_path: Path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from orchestrator.cli import app
+
+    db = tmp_path / "spans.sqlite"
+    _seed_run(db, "r1")
+    monkeypatch.setenv("ORCH_SPAN_DB", str(db))
+
+    result = CliRunner().invoke(app, ["mine", "--repo", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "no candidates mined" in result.stdout.lower()
+    assert (tmp_path / ".orchestrator" / "knowledge" / "candidates.md").is_file()
+
+
+def test_cli_mine_out_and_min_runs(tmp_path: Path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from orchestrator.cli import app
+
+    db = tmp_path / "spans.sqlite"
+    t1, t2 = (_seed_run(db, r) for r in ("r1", "r2"))
+    _step(db, t1, "implement", is_error=True)
+    _step(db, t2, "implement", is_error=True)
+    monkeypatch.setenv("ORCH_SPAN_DB", str(db))
+    out = tmp_path / "elsewhere.md"
+
+    result = CliRunner().invoke(
+        app, ["mine", "--repo", str(tmp_path), "--out", str(out), "--min-runs", "3"]
+    )
+
+    assert result.exit_code == 0
+    assert out.is_file()
+    assert "No candidates mined." in out.read_text()
