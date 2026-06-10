@@ -69,3 +69,48 @@ def test_pipeline_step_role_reference_validated(tmp_path):
 def test_missing_directory_raises(tmp_path):
     with pytest.raises(ConfigError):
         load_workspace(tmp_path / "nope")
+
+
+# --- best-of-n judge cross-validation (M9) ---
+
+
+def _bestof_workspace(root: Path, judge_yaml: str, judge_name: str = "reviewer") -> Path:
+    base = _minimal_workspace(root)
+    _write(base, f"roles/{judge_name}.yaml", judge_yaml)
+    _write(
+        base,
+        "pipelines/bestof.yaml",
+        "steps:\n"
+        "  - id: implement\n"
+        "    role: implementer\n"
+        "    best_of: 2\n"
+        f"    judge: {judge_name}\n",
+    )
+    return base
+
+
+def test_judge_role_must_exist(tmp_path: Path) -> None:
+    base = _minimal_workspace(tmp_path)
+    _write(
+        base,
+        "pipelines/bestof.yaml",
+        "steps:\n"
+        "  - id: implement\n"
+        "    role: implementer\n"
+        "    best_of: 2\n"
+        "    judge: nope\n",
+    )
+    with pytest.raises(ConfigError, match="unknown judge role 'nope'"):
+        load_workspace(base)
+
+
+def test_judge_role_must_be_read_only(tmp_path: Path) -> None:
+    base = _bestof_workspace(tmp_path, "harness: claude-code\npermissions: edit\n")
+    with pytest.raises(ConfigError, match="read-only"):
+        load_workspace(base)
+
+
+def test_read_only_judge_loads(tmp_path: Path) -> None:
+    base = _bestof_workspace(tmp_path, "harness: claude-code\npermissions: read-only\n")
+    ws = load_workspace(base)
+    assert ws.pipelines["bestof"].steps[0].judge == "reviewer"

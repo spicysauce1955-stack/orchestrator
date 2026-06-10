@@ -11,6 +11,7 @@ from orchestrator.config.schemas import (
     Config,
     CoreKnowledge,
     KnowledgeSource,
+    PermissionProfile,
     Pipeline,
     Role,
     Skill,
@@ -119,6 +120,20 @@ def _resolve_references(ws: Workspace) -> None:
                     f"pipeline '{pipeline.name}' step '{step.id}' references unknown role "
                     f"'{step.role}'"
                 )
+            if step.judge is not None:
+                judge_role = ws.roles.get(step.judge)
+                if judge_role is None:
+                    errors.append(
+                        f"pipeline '{pipeline.name}' step '{step.id}' references unknown "
+                        f"judge role '{step.judge}'"
+                    )
+                elif judge_role.permissions is not PermissionProfile.read_only:
+                    # Writer != judge (spec §4/§9): the accountable judge must not
+                    # be able to edit what it scores.
+                    errors.append(
+                        f"pipeline '{pipeline.name}' step '{step.id}': judge role "
+                        f"'{step.judge}' must have read-only permissions"
+                    )
 
     if errors:
         raise ConfigError("; ".join(errors))
