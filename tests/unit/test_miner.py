@@ -161,3 +161,30 @@ def test_single_run_tool_failure_ignored(tmp_path: Path) -> None:
     _insert(db, t1, "tool_call", {"tool.name": "Bash", "tool.status": "failed"})
 
     assert mine(db) == []
+
+
+def test_write_candidates_renders_markdown(tmp_path: Path) -> None:
+    cands = [
+        Candidate(kind="repeated_rejection", subject="implement", runs=("r1", "r2"),
+                  count=3, text="Review rejected step 'implement' 3 time(s)."),
+        Candidate(kind="recurring_tool_failure", subject="Bash", runs=("r1", "r2"),
+                  count=5, text="Tool 'Bash' failed 5 time(s)."),
+    ]
+    out = tmp_path / "kb" / "candidates.md"
+
+    write_candidates(cands, out)
+
+    body = out.read_text()
+    assert "UNVETTED" in body
+    assert "auditor" in body  # vetting duty stated
+    bullets = [ln for ln in body.splitlines() if ln.startswith("- ")]
+    # sorted by count desc: tool failure (5) before rejection (3)
+    assert "recurring_tool_failure" in bullets[0] and "Bash" in bullets[0]
+    assert "repeated_rejection" in bullets[1]
+    assert "(runs: r1, r2)" in bullets[0]
+
+
+def test_write_candidates_empty_states_none(tmp_path: Path) -> None:
+    out = tmp_path / "candidates.md"
+    write_candidates([], out)
+    assert "No candidates mined." in out.read_text()
