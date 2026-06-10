@@ -13,6 +13,7 @@ from orchestrator.compile.compiler import compile_pipeline
 from orchestrator.config.loader import ConfigError, load_workspace
 from orchestrator.config.schemas import Mode, StepType
 from orchestrator.harness.registry import HarnessRegistry
+from orchestrator.observability.gc import gc_stores
 from orchestrator.observability.query import run_messages, run_metrics, run_status
 from orchestrator.observability.spans import SPAN_RUN, configure_tracing, get_tracer
 from orchestrator.observability.store import SqliteSpanExporter, span_db_path
@@ -274,6 +275,31 @@ def resume(
     typer.echo(f"total cost: ${ctx.total_cost_usd:.4f}")
     if any(a.is_error for a in ctx.artifacts.values()):
         raise typer.Exit(1)
+
+
+@app.command()
+def gc(
+    repo: Path = typer.Option(Path("."), "--repo", help="Repo whose .orch/ holds the stores."),
+    keep_runs: int | None = typer.Option(
+        None, "--keep-runs", help="Keep only the N newest runs (default 20 if no policy given)."
+    ),
+    keep_days: int | None = typer.Option(
+        None, "--keep-days", help="Drop runs older than N days."
+    ),
+) -> None:
+    """Drop old runs from the span store and their checkpoint threads (spec §9)."""
+    report = gc_stores(
+        _span_db(repo), _checkpoint_db(repo), keep_runs=keep_runs, keep_days=keep_days
+    )
+    if not report.runs_dropped:
+        typer.echo("gc: nothing to drop.")
+        return
+    typer.echo(
+        f"gc: dropped {len(report.runs_dropped)} run(s) "
+        f"({report.spans_deleted} spans, {report.checkpoint_rows_deleted} checkpoint rows):"
+    )
+    for run_id in report.runs_dropped:
+        typer.echo(f"  {run_id}")
 
 
 if __name__ == "__main__":  # pragma: no cover
