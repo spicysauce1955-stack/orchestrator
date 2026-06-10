@@ -136,6 +136,66 @@ def test_unknown_types_ignored():
     assert parse_codex_line({}, {}) == []
 
 
+def test_mcp_tool_call_started_and_completed_to_toolcall():
+    # Real shape captured 2026-06-10 driving the knowledge MCP server through
+    # `codex exec --json`: MCP calls are their own item type, not
+    # command_execution. Name follows Claude's mcp__<server>__<tool> so tool
+    # spans read the same across harnesses.
+    items: dict[str, str] = {}
+    started = parse_codex_line(
+        {
+            "type": "item.started",
+            "item": {
+                "id": "item_2",
+                "type": "mcp_tool_call",
+                "server": "knowledge",
+                "tool": "search",
+                "arguments": {"query": "staging cluster codename"},
+                "result": None,
+                "error": None,
+                "status": "in_progress",
+            },
+        },
+        items,
+    )
+    assert started == [ToolCall("mcp__knowledge__search", "in_progress")]
+    completed = parse_codex_line(
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "item_2",
+                "type": "mcp_tool_call",
+                "server": "knowledge",
+                "tool": "search",
+                "arguments": {"query": "staging cluster codename"},
+                "result": {"content": [{"type": "text", "text": "lessons.md:2: ..."}]},
+                "error": None,
+                "status": "completed",
+            },
+        },
+        items,
+    )
+    assert completed == [ToolCall("mcp__knowledge__search", "completed")]
+    assert items["item_2"] == "mcp_tool_call"
+
+
+def test_mcp_tool_call_failed_status_passes_through():
+    evs = parse_codex_line(
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "item_3",
+                "type": "mcp_tool_call",
+                "server": "knowledge",
+                "tool": "search",
+                "status": "failed",
+            },
+        },
+        {},
+    )
+    assert evs == [ToolCall("mcp__knowledge__search", "failed")]
+
+
 def test_unknown_file_change_kind_falls_back_to_modify():
     evs = parse_codex_line(
         {

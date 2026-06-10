@@ -65,6 +65,14 @@ def parse_codex_line(obj: dict, items: dict[str, str]) -> list[Event]:
             return [MessageChunk(item.get("text", ""))]
         if itype == "command_execution":
             return [ToolCall("command", "completed" if completed else "in_progress")]
+        if itype == "mcp_tool_call":
+            # Real codex emits MCP calls as their own item type (captured
+            # 2026-06-10), carrying its own status (e.g. "failed" on a
+            # completed-but-errored call). mcp__<server>__<tool> matches
+            # Claude's naming so tool spans read the same across harnesses.
+            name = f"mcp__{item.get('server', '')}__{item.get('tool', '')}"
+            status = item.get("status") or ("completed" if completed else "in_progress")
+            return [ToolCall(name, status)]
         if itype == "file_change" and completed:
             # Completed only: codex repeats the payload on item.started.
             return [

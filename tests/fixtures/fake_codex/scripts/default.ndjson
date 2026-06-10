@@ -4,5 +4,7 @@
 {"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Looking around. "}}
 {"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/bash -lc ls","status":"in_progress"}}
 {"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/bash -lc ls","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_4","type":"mcp_tool_call","server":"knowledge","tool":"search","arguments":{"query":"q"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"mcp_tool_call","server":"knowledge","tool":"search","arguments":{"query":"q"},"result":{"content":[{"type":"text","text":"hit"}]},"error":null,"status":"completed"}}
 {"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Done."}}
 {"type":"turn.completed","usage":{"input_tokens":50,"cached_input_tokens":0,"output_tokens":30}}
