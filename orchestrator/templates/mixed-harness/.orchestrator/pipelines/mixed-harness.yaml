@@ -1,0 +1,24 @@
+# Multi-vendor: classify (cheap task) -> implement on OpenCode -> review on Claude -> merge.
+mode: declarative
+inputs: { task: string }
+steps:
+  - id: classify
+    type: task
+    prompt: 'Classify {{task}} as one of: bugfix | feature | refactor. Reply JSON {"kind":"<one>"}.'
+    output_schema: { kind: "enum[bugfix,feature,refactor]" }
+  - id: implement
+    role: opencoder
+    needs: [classify]
+    prompt: "Kind: {{classify.output.kind}}\nImplement: {{task}}"
+    success_criteria: "true"
+    max_retries: 2
+  - id: review
+    role: reviewer
+    needs: [implement]
+    prompt: 'Review this diff:\n{{implement.diff}}\nReply with JSON {"verdict": "approve|reject"}.'
+    output_schema: { verdict: "enum[approve,reject]" }
+    on_reject: implement
+  - id: merge
+    type: task
+    needs: [review]
+    merge_strategy: sequential-rebase

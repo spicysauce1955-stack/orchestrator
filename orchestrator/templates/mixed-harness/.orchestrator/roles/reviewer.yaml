@@ -1,0 +1,3 @@
+# Read-only agent-as-judge on Claude Code (writer != reviewer, across vendors).
+harness: claude-code
+permissions: read-only

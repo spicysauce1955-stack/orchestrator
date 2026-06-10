@@ -1,0 +1,4 @@
+# Mined lesson candidates (spec §8.1): written by `orch mine`, UNVETTED.
+# The auditor reads these, vets them, and records keepers via the gated write.
+sources: [.orchestrator/knowledge/candidates.md]
+backend: lexical

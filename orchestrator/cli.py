@@ -9,6 +9,7 @@ from pathlib import Path
 
 import typer
 
+from orchestrator import templates
 from orchestrator.compile.compiler import compile_pipeline
 from orchestrator.config.loader import ConfigError, load_workspace
 from orchestrator.config.schemas import Mode, StepType
@@ -326,6 +327,43 @@ def mine(
     for c in cands:
         typer.echo(f"  [{c.kind}] {c.text}")
     typer.echo(f"wrote {target}")
+
+
+def _scaffold(template: str, dest: Path, force: bool) -> None:
+    try:
+        created = templates.scaffold(template, dest, force=force)
+    except templates.TemplateError as e:
+        hint = " (use --force to replace)" if "exists" in str(e) else ""
+        typer.echo(f"error: {e}{hint}")
+        raise typer.Exit(1) from e
+    typer.echo(f"scaffolded template '{template}' into {dest / '.orchestrator'}:")
+    for rel in created:
+        typer.echo(f"  {rel}")
+
+
+@app.command()
+def init(
+    template: str = typer.Option("review-heavy", "--template", help="Template to scaffold."),
+    dest: Path = typer.Option(Path("."), "--dest", help="Directory to seed."),
+    force: bool = typer.Option(False, "--force", help="Replace an existing .orchestrator/."),
+    list_only: bool = typer.Option(False, "--list", help="List available templates and exit."),
+) -> None:
+    """Seed a working .orchestrator/ workspace from a vetted template (spec §4.2)."""
+    if list_only:
+        for t in templates.list_templates():
+            typer.echo(f"  {t.name}: {t.description}")
+        return
+    _scaffold(template, dest, force)
+
+
+@app.command()
+def new(
+    template: str = typer.Option(..., "--template", help="Template to scaffold."),
+    dest: Path = typer.Option(Path("."), "--dest", help="Directory to seed."),
+    force: bool = typer.Option(False, "--force", help="Replace an existing .orchestrator/."),
+) -> None:
+    """Alias of `orch init` with an explicit template (spec §4.2)."""
+    _scaffold(template, dest, force)
 
 
 if __name__ == "__main__":  # pragma: no cover
